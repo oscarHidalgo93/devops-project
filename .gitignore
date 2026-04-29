@@ -1,0 +1,18 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Docker
+*.tar
+
+# Helm
+*.tgz
+
+# Kubernetes
+*.log
