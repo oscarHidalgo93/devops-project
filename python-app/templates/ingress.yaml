@@ -6,6 +6,7 @@ metadata:
   labels:
     {{- include "python-app.labels" . | nindent 4 }}
 spec:
+  ingressClassName: traefik
   rules:
     - host: {{ .Values.ingress.host }}
       http:

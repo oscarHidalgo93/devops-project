@@ -5,11 +5,13 @@ metadata:
   labels:
     {{- include "python-app.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type | default "NodePort" }}
+  type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port | default 80 }}
       targetPort: {{ .Values.containerPort }}
-      nodePort: {{ .Values.service.nodePort | default 30007 }}  
       protocol: TCP
+      {{- if .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
   selector:
     {{- include "python-app.selectorLabels" . | nindent 4 }}
