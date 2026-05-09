@@ -6,7 +6,7 @@ image:
   pullPolicy: IfNotPresent
 
 service:
-  type: NodePort
+  type: ClusterIP
   port: 80
   #nodePort: 30007
 
@@ -19,3 +19,7 @@ resources:
   limits:
     cpu: "500m"
     memory: "256Mi"
+
+ingress:
+  enabled: true
+  host: python.local    
