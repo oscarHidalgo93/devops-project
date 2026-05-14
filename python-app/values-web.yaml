@@ -1,4 +1,4 @@
-replicaCount: 2
+replicaCount: 1
 
 image:
   repository: python-k8s-app
@@ -7,18 +7,18 @@ image:
 
 service:
   type: ClusterIP
-  port: 80  
-  
-containerPort: 8080
+  port: 80
 
-resources:
-  requests:
-    cpu: "100m"
-    memory: "64Mi" 
-  limits:
-    cpu: "500m"
-    memory: "256Mi"
+containerPort: 8080
 
 ingress:
   enabled: true
-  host: api.local    
+  host: web.local
+
+resources:
+  limits:
+    cpu: "100m"
+    memory: "256Mi"
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
