@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Frontend App</title>
+</head>
+<body>
+  <h1>Frontend funcionando 🚀</h1>
+
+  <button onclick="loadApi()">Llamar API</button>
+
+  <pre id="result"></pre>
+
+  <script>
+    async function loadApi() {
+      const response = await fetch("http://api.local");
+      const data = await response.text();
+
+      document.getElementById("result").innerText = data;
+    }
+  </script>
+</body>
+</html>

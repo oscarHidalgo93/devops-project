@@ -1,0 +1,24 @@
+replicaCount: 1
+
+image:
+  repository: frontend-app
+  tag: "1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+containerPort: 80
+
+ingress:
+  enabled: true
+  host: web.local
+
+resources:
+  limits:
+    cpu: "100m"
+    memory: "128Mi"
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
