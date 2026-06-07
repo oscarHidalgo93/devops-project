@@ -1,15 +1,15 @@
 replicaCount: 1
 
 image:
-  repository: python-k8s-app
-  tag: "2.0"
+  repository: frontend-app
+  tag: "1.0"
   pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
   port: 80
 
-containerPort: 8080
+containerPort: 80
 
 ingress:
   enabled: true

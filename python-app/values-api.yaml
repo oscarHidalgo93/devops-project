@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: python-k8s-app
-  tag: "2.0"
+  tag: "2.1"
   pullPolicy: IfNotPresent
 
 service:
