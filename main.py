@@ -1,7 +1,12 @@
-from fastapi import FastAPI
+from flask import Flask
+from flask_cors import CORS
 
-app = FastAPI()
+app = Flask(__name__)
+CORS(app)
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello from Kubernetes 2.0!"}
+@app.route("/")
+def home():
+    return "Hello from Python API 🚀"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)

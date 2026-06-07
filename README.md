@@ -1,181 +1,170 @@
-# 🐳 Python App + Docker + Kubernetes + Helm (DevOps Practice)
+# DevOps Learning Project
 
-## 📌 Descripción
+Proyecto práctico para aprender conceptos de Docker, Kubernetes, Helm y despliegue de aplicaciones modernas siguiendo un enfoque similar al utilizado en entornos empresariales.
 
-Este repositorio es un entorno de práctica orientado a aprender y consolidar conceptos fundamentales de **DevOps** y **plataformas cloud-native**.
+## Objetivos
 
-El objetivo es recorrer el flujo completo desde una aplicación local hasta su despliegue en Kubernetes usando Helm, entendiendo cada capa en lugar de simplemente ejecutarla.
+Este repositorio tiene como finalidad consolidar conocimientos en:
 
----
-
-## 🎯 Objetivos de aprendizaje
-
-Este proyecto cubre:
-
-* ✔ Containerización de una aplicación Python
-* ✔ Construcción y gestión de imágenes Docker
-* ✔ Despliegue en Kubernetes
-* ✔ Exposición de servicios (NodePort / ClusterIP)
-* ✔ Uso de Helm para templating y despliegue
-* ✔ Separación de configuración por entornos (dev / prod)
-* ✔ Conceptos clave de arquitectura moderna
+- Docker
+- Kubernetes (K3s)
+- Helm
+- Ingress
+- Gestión de imágenes
+- Arquitecturas Frontend + Backend
+- Git Flow
+- Automatización de despliegues
+- CI/CD (próximamente)
 
 ---
 
-## 🧱 Arquitectura del proyecto
+## Arquitectura actual
 
+```text
+                +----------------+
+                |   Ingress      |
+                +--------+-------+
+                         |
+          +--------------+--------------+
+          |                             |
+          v                             v
+
+    web.local                     api.local
+
+          |                             |
+          v                             v
+
+   Frontend (Nginx)             Backend (Flask)
+
+          |                             |
+          +------------- HTTP ----------+
 ```
+
+---
+
+## Tecnologías utilizadas
+
+### Backend
+
+- Python
+- Flask
+- Flask-CORS
+
+### Frontend
+
+- HTML
+- JavaScript
+- Nginx
+
+### Contenedores
+
+- Docker
+
+### Orquestación
+
+- Kubernetes (K3s)
+
+### Gestión de despliegues
+
+- Helm
+
+### Observabilidad
+
+- Lens
+
+### Control de versiones
+
+- Git
+- GitHub
+
+---
+
+## Estructura del proyecto
+
+```text
 Python-project/
 │
-├── python-app/              # Helm Chart (infraestructura)
+├── frontend/
+│   ├── Dockerfile
+│   └── index.html
+│
+├── python-app/
 │   ├── templates/
-│   │   ├── deployment.yaml
-│   │   └── service.yaml
+│   ├── Chart.yaml
 │   ├── values.yaml
-│   ├── values-dev.yaml
-│   ├── values-prod.yaml
-│   └── Chart.yaml
+│   ├── values-api.yaml
+│   └── values-web.yaml
 │
-├── app/                     # Aplicación Python
-│   └── main.py
-│
-├── Dockerfile               # Imagen de la app
+├── Dockerfile
+├── main.py
 ├── requirements.txt
-└── .gitignore
+└── README.md
 ```
 
 ---
 
-## 🔁 Flujo de trabajo
+## Helm
 
-### 1. Desarrollo local
+Se utiliza un único Chart para desplegar distintas aplicaciones mediante archivos de configuración independientes.
 
-* Aplicación Python ejecutada con `uvicorn`
-* Uso de entorno virtual (`venv`) para dependencias
-
----
-
-### 2. Containerización
+### Backend
 
 ```bash
-docker build -t python-k8s-app:2.0 .
+helm upgrade --install python-api . \
+  -f values.yaml \
+  -f values-api.yaml
 ```
 
-* Se genera una imagen Docker de la aplicación
-
----
-
-### 3. Kubernetes (k3s)
-
-* Despliegue mediante `Deployment`
-* Exposición mediante `Service`
-
-Tipos usados:
-
-* `NodePort` → acceso desde fuera (entorno dev)
-* `ClusterIP` → acceso interno (entorno prod)
-
----
-
-### 4. Helm
-
-Uso de Helm para:
-
-* Parametrizar despliegues
-* Reutilizar templates
-* Gestionar múltiples entornos
-
----
-
-## ⚙️ Despliegue con Helm
-
-### Entorno DEV
+### Frontend
 
 ```bash
-helm install python-app-dev . -f values-dev.yaml
+helm upgrade --install python-web . \
+  -f values.yaml \
+  -f values-web.yaml
 ```
 
-Características:
+---
 
-* 1 réplica
-* NodePort (accesible desde fuera)
+## Funcionalidades implementadas
+
+- [x] Aplicación Python containerizada
+- [x] Despliegue en Kubernetes
+- [x] Service y Deployment
+- [x] Helm Chart reutilizable
+- [x] Ingress con dominios independientes
+- [x] Frontend y Backend desplegados por separado
+- [x] Gestión de imágenes locales en K3s
+- [x] Uso de Lens para visualización del cluster
 
 ---
 
-### Entorno PROD
+## Lecciones aprendidas
 
-```bash
-helm install python-app-prod . -f values-prod.yaml
-```
+Durante el desarrollo se han abordado problemas habituales en entornos Kubernetes:
 
-Características:
-
-* Varias réplicas
-* ClusterIP (solo interno)
-
----
-
-### Actualización
-
-```bash
-helm upgrade python-app-prod . --set image.tag=3.0
-```
-
-* Rolling update automático
+- Errores de ImagePullBackOff
+- Gestión de imágenes locales en K3s
+- Conflictos de NodePort
+- Selectors inmutables en Deployments
+- Configuración de kubeconfig
+- Uso de múltiples values en Helm
+- Separación de configuración por aplicación
 
 ---
 
-## 🧠 Conceptos clave aprendidos
+## Próximos pasos
 
-* Diferencia entre Docker y runtime de Kubernetes
-* Importancia de los labels y selectors
-* Inmutabilidad de ciertos campos (ej: selector)
-* Separación entre:
-
-  * código (app)
-  * infraestructura (Helm)
-  * configuración (values.yaml)
-* Gestión de recursos (`requests` vs `limits`)
-* Problemas comunes:
-
-  * ImagePullBackOff
-  * nodePort ocupado
-  * errores de permisos
-  * conflictos entre kubectl y Helm
+- [ ] Namespaces
+- [ ] ConfigMaps
+- [ ] Secrets
+- [ ] Autoscaling (HPA)
+- [ ] Docker Registry
+- [ ] CI/CD con Jenkins
+- [ ] Observabilidad y monitorización
+- [ ] Entornos Dev / Prod
 
 ---
 
-## 🚀 Próximos pasos
+## Propósito
 
-* 🔥 Implementar Ingress (acceso por dominio)
-* 🔐 Configurar HTTPS (TLS)
-* 📦 Publicar imágenes en Docker Hub
-* ⚙️ Integrar CI/CD (GitHub Actions)
-* 🧪 Añadir pruebas automatizadas
-
----
-
-## 🧪 Requisitos
-
-* Docker
-* Kubernetes (k3s recomendado)
-* kubectl
-* Helm
-
----
-
-## 📚 Propósito
-
-Este repositorio no es un proyecto de producción, sino un entorno de aprendizaje para:
-
-* Entender cómo se despliega software en sistemas modernos
-* Simular escenarios reales de trabajo en DevOps / Platform Engineering
-* Construir una base sólida para proyectos más complejos
-
----
-
-## 👨‍💻 Autor
-
-Proyecto de práctica personal enfocado en aprendizaje progresivo de DevOps.
-
----
+Este proyecto no busca construir una aplicación de negocio, sino servir como laboratorio práctico para aprender tecnologías DevOps y Cloud Native mediante ejercicios progresivos y cercanos a escenarios reales.
