@@ -20,9 +20,15 @@ spec:
     spec:
       containers:
         - name: {{ .Chart.Name }}
+
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
 
+          envFrom:
+            - configMapRef:
+                name: {{include "python-app.fullname" . }}-config
+            - secretRef:
+                name: {{include "python-app.fullname" . }}-secret
           ports:
             - containerPort: {{ .Values.containerPort }}
           resources:
