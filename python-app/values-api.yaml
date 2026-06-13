@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: python-k8s-app
-  tag: "2.1"
+  tag: "2.2"
   pullPolicy: IfNotPresent
 
 service:
@@ -21,4 +21,8 @@ resources:
 
 ingress:
   enabled: true
-  host: api.local    
+  host: api.local  
+
+config:
+  appName: python-api
+  environment: dev      

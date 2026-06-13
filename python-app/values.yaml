@@ -12,6 +12,15 @@ service:
 
 containerPort: 8080
 
+
+ingress:
+  enabled: false
+  host: "" 
+   
+config:
+  appName: ""
+  environment: ""
+
 resources: 
   requests:
     cpu: "50m"

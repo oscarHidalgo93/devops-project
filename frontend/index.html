@@ -1,22 +1,130 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Frontend App</title>
+  <meta charset="UTF-8" />
+  <title>DevOps Lab</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #111827, #1f2937);
+      color: #f9fafb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    .card {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 18px;
+      padding: 32px;
+      width: 520px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    }
+
+    .badge {
+      display: inline-block;
+      background: #2563eb;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+    }
+
+    p {
+      color: #d1d5db;
+      line-height: 1.5;
+    }
+
+    button {
+      margin-top: 20px;
+      background: #22c55e;
+      border: none;
+      color: #052e16;
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #16a34a;
+    }
+
+    pre {
+      margin-top: 20px;
+      background: #020617;
+      border: 1px solid #334155;
+      padding: 16px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      color: #93c5fd;
+      min-height: 70px;
+    }
+
+    .stack {
+      margin-top: 22px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tag {
+      background: #1f2937;
+      border: 1px solid #374151;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #cbd5e1;
+    }
+  </style>
 </head>
 <body>
-  <h1>Frontend funcionando 🚀</h1>
+  <div class="card">
+    <span class="badge">Kubernetes DevOps Lab</span>
 
-  <button onclick="loadApi()">Llamar API</button>
+    <h1>Frontend funcionando 🚀</h1>
 
-  <pre id="result"></pre>
+    <p>
+      Esta web está servida desde un contenedor Nginx y desplegada en Kubernetes mediante Helm.
+      El botón llama al backend publicado por Ingress en <strong>api.local</strong>.
+    </p>
+
+    <button onclick="loadApi()">Llamar a la API</button>
+
+    <pre id="result">Esperando respuesta del backend...</pre>
+
+    <div class="stack">
+      <span class="tag">Docker</span>
+      <span class="tag">K3s</span>
+      <span class="tag">Helm</span>
+      <span class="tag">Ingress</span>
+      <span class="tag">ConfigMap</span>
+      <span class="tag">Tailscale</span>
+    </div>
+  </div>
 
   <script>
     async function loadApi() {
-      const response = await fetch("http://api.local");
-      const data = await response.text();
+      const result = document.getElementById("result");
+      result.innerText = "Consultando backend...";
 
-      document.getElementById("result").innerText = data;
+      try {
+        const response = await fetch("http://api.local");
+        const data = await response.json();
+
+        result.innerText = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.innerText = "Error llamando a la API:\n" + error;
+      }
     }
   </script>
 </body>
