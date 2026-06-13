@@ -8,10 +8,13 @@ CORS(app)
 
 @app.route("/")
 def home():
+    api_token = os.getenv("API_TOKEN")
+
     return {
         "message": "Hello from Python API 🚀",
         "app": os.getenv("APP_NAME"),
-        "environment": os.getenv("ENVIRONMENT")
+        "environment": os.getenv("ENVIRONMENT"),
+        "secret_loaded": api_token is not None
     }
 
 if __name__ == "__main__":

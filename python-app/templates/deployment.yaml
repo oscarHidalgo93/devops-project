@@ -27,6 +27,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{include "python-app.fullname" . }}-config
+            - secretRef:
+                name: {{include "python-app.fullname" . }}-secret
           ports:
             - containerPort: {{ .Values.containerPort }}
           resources:

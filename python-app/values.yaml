@@ -12,7 +12,6 @@ service:
 
 containerPort: 8080
 
-
 ingress:
   enabled: false
   host: "" 
@@ -20,6 +19,9 @@ ingress:
 config:
   appName: ""
   environment: ""
+
+secret:
+  apiToken: ""
 
 resources: 
   requests:

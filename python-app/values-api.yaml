@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: python-k8s-app
-  tag: "2.2"
+  tag: "2.3"
   pullPolicy: IfNotPresent
 
 service:
@@ -10,6 +10,11 @@ service:
   port: 80  
   
 containerPort: 8080
+
+#Secret: en siguientes versiones se dejara de subir secretos realmente sensibles a git, 
+#Se recomienda usar un gestor de secretos como Hashicorp Vault o AWS Secrets Manager.
+secret:
+  apiToken: "dev-token-1234567890"
 
 resources:
   requests:
