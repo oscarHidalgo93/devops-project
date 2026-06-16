@@ -11,7 +11,7 @@ service:
   
 containerPort: 8080
 
-#Secret: en siguientes versiones se dejara de subir secretos realmente sensibles a git, 
+#Secret: en siguientes versiones se dejara de subir secretos realmente sensibles a git, esto es una prueba.
 #Se recomienda usar un gestor de secretos como Hashicorp Vault o AWS Secrets Manager.
 secret:
   apiToken: "dev-token-1234567890"
@@ -30,4 +30,11 @@ ingress:
 
 config:
   appName: python-api
-  environment: dev      
+  environment: dev  
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80

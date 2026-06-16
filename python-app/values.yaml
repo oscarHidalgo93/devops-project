@@ -30,3 +30,9 @@ resources:
   limits:
     cpu: "100m"
     memory: "256Mi"
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70    
