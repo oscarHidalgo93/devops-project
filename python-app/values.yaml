@@ -23,6 +23,13 @@ config:
 secret:
   apiToken: ""
 
+persistance:
+  enabled: false
+  size: 1Gi
+  mountPath: /data
+  accessMode: ReadWriteOnce
+
+
 resources: 
   requests:
     cpu: "50m"

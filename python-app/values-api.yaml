@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: python-k8s-app
-  tag: "2.3"
+  tag: "2.4"
   pullPolicy: IfNotPresent
 
 service:
@@ -15,6 +15,12 @@ containerPort: 8080
 #Se recomienda usar un gestor de secretos como Hashicorp Vault o AWS Secrets Manager.
 secret:
   apiToken: "dev-token-1234567890"
+
+persistance:
+  enabled: true
+  size: 1Gi
+  mountPath: /data
+  accessMode: ReadWriteOnce
 
 resources:
   requests:

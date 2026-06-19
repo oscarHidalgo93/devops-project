@@ -1,0 +1,14 @@
+{{- if .Values.persistance.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "python-app.fullname" . }}-pvc
+  labels:
+    {{- include "python-app.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistance.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistance.size }}
+{{- end }}
