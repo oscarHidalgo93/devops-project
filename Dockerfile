@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
+#No escbribir buffer interno de python y salir por la stdout.
+ENV PYTHONDONTWRITEBYTECODE=1 
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
