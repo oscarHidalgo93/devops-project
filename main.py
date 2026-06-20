@@ -25,27 +25,27 @@ def home():
 
 @app.route("/counter")
 def counter():
-    couter_file = get_counter_file()
-    counter_dir = os.path.dirname(couter_file)
+    counter_file = get_counter_file()
+    counter_dir = os.path.dirname(counter_file)
 
     os.makedirs(counter_dir, exist_ok=True)
 
-    if not os.path.exists(couter_file):
+    if not os.path.exists(counter_file):
         count = 0
     else:
-        with open(couter_file, "r") as file:
+        with open(counter_file, "r") as file:
             content = file.read().strip()
             count = int(content) if content else 0
 
     count += 1
 
-    with open(couter_file, "w") as file:
+    with open(counter_file, "w") as file:
         file.write(str(count))
 
     return {
         "message": "Persistent counter updated",
         "counter": count,
-        "file": couter_file,
+        "file": counter_file,
     }
 
 

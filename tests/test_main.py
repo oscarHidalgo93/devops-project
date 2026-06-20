@@ -29,4 +29,5 @@ def test_counter_endpoint_increments(monkeypatch, tmp_path):
 
     assert first_data["counter"] == 1
     assert second_data["counter"] == 2
+    assert second_data["file"] == str(counter_file)
     assert counter_file.read_text() == "2"
