@@ -1,0 +1,66 @@
+name: DevSecOps CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  validate:
+    name: Validate application and Helm chart
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile main.py
+
+      - name: Run tests
+        run: |
+          python -m pytest -v
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint
+        working-directory: python-app
+        run: |
+          helm lint .
+
+      - name: Render API Helm templates
+        working-directory: python-app
+        run: |
+          helm template test-api . -f values.yaml -f values-api.yaml
+
+      - name: Render Web Helm templates
+        working-directory: python-app
+        run: |
+          helm template test-web . -f values.yaml -f values-web.yaml
+
+      - name: Build backend Docker image
+        run: |
+          docker build -t python-k8s-app:ci .
+
+      - name: Build frontend Docker image
+        working-directory: frontend
+        run: |
+          docker build -t frontend-app:ci .

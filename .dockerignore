@@ -3,3 +3,6 @@ __pycache__/
 .git
 .gitignore
 app.tar
+tests/
+.venv/
+

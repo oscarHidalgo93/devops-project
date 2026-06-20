@@ -6,7 +6,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-COUNTER_FILE = "/data/counter.txt"
+
+def get_counter_file():
+    return os.getenv("COUNTER_FILE", "/data/counter.txt")
 
 
 @app.route("/")
@@ -23,24 +25,27 @@ def home():
 
 @app.route("/counter")
 def counter():
-    os.makedirs("/data", exist_ok=True)
+    couter_file = get_counter_file()
+    counter_dir = os.path.dirname(couter_file)
 
-    if not os.path.exists(COUNTER_FILE):
+    os.makedirs(counter_dir, exist_ok=True)
+
+    if not os.path.exists(couter_file):
         count = 0
     else:
-        with open(COUNTER_FILE, "r") as file:
+        with open(couter_file, "r") as file:
             content = file.read().strip()
             count = int(content) if content else 0
 
     count += 1
 
-    with open(COUNTER_FILE, "w") as file:
+    with open(couter_file, "w") as file:
         file.write(str(count))
 
     return {
         "message": "Persistent counter updated",
         "counter": count,
-        "file": COUNTER_FILE,
+        "file": couter_file,
     }
 
 

@@ -22,8 +22,9 @@
 *.tmproj
 .vscode/
 # Python project specific
-venv/
+.venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 .git/
 .gitignore
