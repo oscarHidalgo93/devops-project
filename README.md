@@ -85,15 +85,15 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    Browser[Navegador] --> Web[Frontend web.local]
-    Web --> Nginx[Nginx]
-    Nginx --> ApiCall[fetch http://api.local]
-    ApiCall --> Flask[Backend Flask API]
-    Flask --> Env[Variables de entorno]
-    Env --> CM[ConfigMap]
-    Env --> Sec[Secret]
-    Flask --> Data[/data/counter.txt]
-    Data --> PVC[PVC]
+    Browser[Navegador] --> Web["Frontend web.local"]
+    Web --> Nginx["Nginx"]
+    Nginx --> ApiCall["fetch http://api.local"]
+    ApiCall --> Flask["Backend Flask API"]
+    Flask --> Env["Variables de entorno"]
+    Env --> CM["ConfigMap"]
+    Env --> Sec["Secret]"
+    Flask --> Data["/data/counter.txt"]
+    Data --> PVC["PVC"]
 ```
 
 ---
