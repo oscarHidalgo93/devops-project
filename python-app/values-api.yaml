@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: python-k8s-app
-  tag: "2.1"
+  tag: "2.4"
   pullPolicy: IfNotPresent
 
 service:
@@ -10,6 +10,17 @@ service:
   port: 80  
   
 containerPort: 8080
+
+#Secret: en siguientes versiones se dejara de subir secretos realmente sensibles a git, esto es una prueba.
+#Se recomienda usar un gestor de secretos como Hashicorp Vault o AWS Secrets Manager.
+secret:
+  apiToken: "dev-token-1234567890"
+
+persistance:
+  enabled: true
+  size: 1Gi
+  mountPath: /data
+  accessMode: ReadWriteOnce
 
 resources:
   requests:
@@ -21,4 +32,15 @@ resources:
 
 ingress:
   enabled: true
-  host: api.local    
+  host: api.local  
+
+config:
+  appName: python-api
+  environment: dev  
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80

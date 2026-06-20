@@ -16,14 +16,33 @@ spec:
     metadata:
       labels:
         {{- include "python-app.selectorLabels" . | nindent 8 }}
-
     spec:
       containers:
         - name: {{ .Chart.Name }}
+
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
 
+          envFrom:
+            - configMapRef:
+                name: {{include "python-app.fullname" . }}-config
+            - secretRef:
+                name: {{include "python-app.fullname" . }}-secret
           ports:
             - containerPort: {{ .Values.containerPort }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+
+          {{- if .Values.persistance.enabled}}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistance.mountPath }}
+          {{- end }}
+      {{- if .Values.persistance.enabled}}          
+      volumes:        
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "python-app.fullname" . }}-pvc
+      {{- end }} 
+
+        

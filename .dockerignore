@@ -1,5 +1,9 @@
 __pycache__/
+.pytest_cache/
 *.pyc
 .git
 .gitignore
 app.tar
+tests/
+.venv/
+

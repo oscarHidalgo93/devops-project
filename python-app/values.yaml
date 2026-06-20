@@ -12,6 +12,24 @@ service:
 
 containerPort: 8080
 
+ingress:
+  enabled: false
+  host: "" 
+   
+config:
+  appName: ""
+  environment: ""
+
+secret:
+  apiToken: ""
+
+persistance:
+  enabled: false
+  size: 1Gi
+  mountPath: /data
+  accessMode: ReadWriteOnce
+
+
 resources: 
   requests:
     cpu: "50m"
@@ -19,3 +37,9 @@ resources:
   limits:
     cpu: "100m"
     memory: "256Mi"
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70    
