@@ -92,7 +92,7 @@ flowchart LR
     Flask --> Env["Variables de entorno"]
     Env --> CM["ConfigMap"]
     Env --> Sec["Secret]"
-    Flask --> Data["/data/counter.txt"]
+    Flask --> Data['/data/counter.txt']
     Data --> PVC["PVC"]
 ```
 
