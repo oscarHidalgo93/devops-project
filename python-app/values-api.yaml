@@ -45,7 +45,7 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
 
-PodSecurityContext:
+podSecurityContext:
   fsGroup: 10001
   seccompProfile:
     type: RuntimeDefault
@@ -53,6 +53,7 @@ PodSecurityContext:
 containerSecurityContext:
   runAsNonRoot: true
   runAsUser: 10001
+  runAsGroup: 10001
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   capabilities:
