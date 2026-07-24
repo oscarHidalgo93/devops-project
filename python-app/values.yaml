@@ -5,6 +5,12 @@ image:
   tag: "2.0"
   pullPolicy: IfNotPresent
 
+#Buenas practicas de seguridad (scan de Trivy))
+podSecurityContext: {}
+containerSecurityContext: {}
+extraVolumes: []
+extraVolumeMounts: []
+  
 service:
   type: NodePort
   port: 80

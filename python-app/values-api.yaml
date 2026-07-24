@@ -44,3 +44,26 @@ autoscaling:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
+
+PodSecurityContext:
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+    
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+extraVolumes:
+  - name: tmp
+    emptyDir: {}
+    
+extraVolumeMounts:
+  - name: tmp
+    mountPath: /tmp        
+
