@@ -1,5 +1,11 @@
 name: DevSecOps CI
-
+# Nota de seguridad (buena práctica para producción):
+# Las actions de terceros usan tags (@v4, @v3...) en vez de pinearse por SHA de commit.
+# Un tag puede ser reapuntado por el mantenedor o un atacante que comprometa su repo,
+# mientras que un SHA es inmutable. En este lab se acepta el riesgo por simplicidad
+# de mantenimiento; en un pipeline de producción se recomienda pinear cada `uses:`
+# por SHA (ver https://docs.github.com/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions)
+# o usar una herramienta como `pinact` para automatizarlo.
 on:
   push:
     branches:
