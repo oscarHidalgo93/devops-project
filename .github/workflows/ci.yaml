@@ -108,29 +108,41 @@ jobs:
 
       - name: Build backend Docker image
         run: |
-          docker build -t python-k8s-app:ci .
+          IMAGE_TAG=${GITHUB_SHA::7}        
+          docker build -t ghcr.io/oscarhidalgo93/python-k8s-app:$IMAGE_TAG .
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
       - name: Build frontend Docker image
         working-directory: frontend
         run: |
-          docker build -t frontend-app:ci .
+          docker build -t ghcr.io/oscarhidalgo93/frontend-app:$IMAGE_TAG .
 
       - name: Scan backend Docker image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "image"
-          image-ref: "python-k8s-app:ci"
+          image-ref: "ghcr.io/oscarhidalgo93/python-k8s-app:${{ env.IMAGE_TAG }}"
           format: "table"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           exit-code: "1"
+      
+      - name: Push backend Docker image to GHCR
+        if: github.event_name == 'push'
+        run: |
+          docker push ghcr.io/oscarhidalgo93/python-k8s-app:${{ env.IMAGE_TAG }}
 
       - name: Scan frontend Docker image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "image"
-          image-ref: "frontend-app:ci"
+          image-ref: "ghcr.io/oscarhidalgo93/frontend-app:${{ env.IMAGE_TAG }}"
           format: "table"
           severity: "HIGH,CRITICAL"
           ignore-unfixed: true
           exit-code: "1"
+
+      - name: Push frontend Docker image to GHCR
+        if: github.event_name == 'push'
+        run: |
+          docker push ghcr.io/oscarhidalgo93/frontend-app:${{ env.IMAGE_TAG }}
