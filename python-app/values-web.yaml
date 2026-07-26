@@ -2,14 +2,14 @@ replicaCount: 1
 
 image:
   repository: frontend-app
-  tag: "1.1"
+  tag: "1.2"
   pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP
   port: 80
 
-containerPort: 80
+containerPort: 8080
 
 ingress:
   enabled: true
@@ -22,3 +22,38 @@ resources:
   requests:
     cpu: "50m"
     memory: "64Mi"
+
+podSecurityContext:
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+extraVolumes:
+  - name: nginx-cache
+    emptyDir: {}
+  - name: nginx-run
+    emptyDir: {}
+  - name: nginx-tmp
+    emptyDir: {}
+  - name: nginx-logs
+    emptyDir: {}  
+
+extraVolumeMounts:
+  - name: nginx-cache
+    mountPath: /var/cache/nginx
+  - name: nginx-run
+    mountPath: /var/run
+  - name: nginx-tmp
+    mountPath: /tmp        
+  - name: nginx-logs
+    mountPath: /var/log/nginx

@@ -1,5 +1,11 @@
 name: DevSecOps CI
-
+# Nota de seguridad (buena práctica para producción):
+# Las actions de terceros usan tags (@v4, @v3...) en vez de pinearse por SHA de commit.
+# Un tag puede ser reapuntado por el mantenedor o un atacante que comprometa su repo,
+# mientras que un SHA es inmutable. En este lab se acepta el riesgo por simplicidad
+# de mantenimiento; en un pipeline de producción se recomienda pinear cada `uses:`
+# por SHA (ver https://docs.github.com/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions)
+# o usar una herramienta como `pinact` para automatizarlo.
 on:
   push:
     branches:
@@ -9,18 +15,28 @@ on:
     branches:
       - develop
       - main
+
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   validate:
-    name: Validate application and Helm chart
+    name: Validate application, Helm chart and security checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -62,6 +78,25 @@ jobs:
         run: |
           helm template test-web . -f values.yaml -f values-web.yaml
 
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "config"
+          scan-ref: "python-app"
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
       - name: Build backend Docker image
         run: |
           docker build -t python-k8s-app:ci .
@@ -70,3 +105,23 @@ jobs:
         working-directory: frontend
         run: |
           docker build -t frontend-app:ci .
+
+      - name: Scan backend Docker image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "image"
+          image-ref: "python-k8s-app:ci"
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Scan frontend Docker image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: "image"
+          image-ref: "frontend-app:ci"
+          format: "table"
+          severity: "HIGH,CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"

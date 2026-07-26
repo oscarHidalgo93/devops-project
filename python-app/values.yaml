@@ -5,6 +5,26 @@ image:
   tag: "2.0"
   pullPolicy: IfNotPresent
 
+#Buenas practicas de seguridad (scan de Trivy))
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext: 
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+extraVolumes: 
+  - name: tmp
+    emptyDir: {}
+extraVolumeMounts: 
+  - name: tmp
+    mountPath: /tmp
+  
 service:
   type: NodePort
   port: 80
@@ -42,4 +62,6 @@ autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 3
-  targetCPUUtilizationPercentage: 70    
+  targetCPUUtilizationPercentage: 70  
+  
+    
