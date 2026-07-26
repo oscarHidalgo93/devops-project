@@ -8,10 +8,11 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt &&\
+    pip uninstall -y pip setuptools wheel
 
 COPY main.py .
 
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+CMD ["python", "main.py

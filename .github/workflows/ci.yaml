@@ -5,7 +5,7 @@ on:
     branches:
       - develop
       - main
-      - feature/security-scans
+      #- feature/security-scans
   pull_request:
     branches:
       - develop
