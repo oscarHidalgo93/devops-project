@@ -11,6 +11,7 @@ on:
     branches:
       - develop
       - main
+      - feature/ghcr-registry
   pull_request:
     branches:
       - develop
