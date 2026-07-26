@@ -17,12 +17,18 @@ spec:
       labels:
         {{- include "python-app.selectorLabels" . | nindent 8 }}
     spec:
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{include "python-app.fullname" . }}-config
@@ -32,17 +38,26 @@ spec:
             - containerPort: {{ .Values.containerPort }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-
-          {{- if .Values.persistance.enabled}}
+          {{- if or .Values.persistance.enabled .Values.extraVolumeMounts }}
           volumeMounts:
+            {{- if .Values.persistance.enabled }}
             - name: data
               mountPath: {{ .Values.persistance.mountPath }}
           {{- end }}
-      {{- if .Values.persistance.enabled}}          
-      volumes:        
+          {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      {{- if or .Values.persistance.enabled .Values.extraVolumes }}          
+      volumes: 
+        {{- if .Values.persistance.enabled }}       
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "python-app.fullname" . }}-pvc
+      {{- end }}
+        {{- with .Values.extraVolumes }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }} 
 
         

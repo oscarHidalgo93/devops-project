@@ -92,7 +92,7 @@ flowchart LR
     Flask --> Env["Variables de entorno"]
     Env --> CM["ConfigMap"]
     Env --> Sec["Secret]"
-    Flask --> Data["/data/counter.txt"]
+    Flask --> Data['/data/counter.txt']
     Data --> PVC["PVC"]
 ```
 
@@ -249,7 +249,7 @@ Responsabilidades:
 
 ### Backend
 
-Construcción de imagen backend:
+Construcción de imagen backend (uso local/desarrollo):
 
 ```bash
 docker build -t python-k8s-app:latest .
@@ -257,14 +257,25 @@ docker build -t python-k8s-app:latest .
 
 ### Frontend
 
-Construcción de imagen frontend:
+Construcción de imagen frontend (uso local/desarrollo):
 
 ```bash
 cd frontend
 docker build -t frontend-app:latest .
 ```
 
-En el estado actual del laboratorio, las imágenes pueden construirse localmente y cargarse en el runtime de K3s si no se utiliza un registry externo.
+### Publicación en GHCR (GitHub Container Registry)
+
+El pipeline de CI construye y publica automáticamente ambas imágenes en GHCR en cada push a `develop`/`main`, usando como tag el SHA corto del commit:
+
+```text
+ghcr.io/oscarhidalgo93/python-k8s-app:<sha-corto>
+ghcr.io/oscarhidalgo93/frontend-app:<sha-corto>
+```
+
+El push a GHCR ocurre **después** de que la imagen pase el escaneo de Trivy y **solo** en eventos `push` (no en Pull Requests), para no publicar imágenes de ramas que aún no se han integrado. Ambos paquetes son públicos, por lo que K3s puede hacer `pull` sin necesidad de credenciales.
+
+Con esto, el flujo manual de construir la imagen en la VM, exportarla con `docker save` e importarla en containerd con `sudo k3s ctr images import` **ya no es necesario** para desplegar en el cluster.
 
 ---
 
@@ -304,6 +315,12 @@ values-api.yaml   → configuración específica del backend
 values-web.yaml   → configuración específica del frontend
 ```
 
+El tag de la imagen (`image.tag`) **no se define en los ficheros de values** — se pasa de forma explícita en el momento del despliegue con `--set`, usando el SHA corto del commit que se quiere desplegar (el mismo que generó y publicó el CI en GHCR):
+
+```bash
+git rev-parse --short HEAD
+```
+
 ### Despliegue backend
 
 ```bash
@@ -312,7 +329,9 @@ cd python-app
 helm upgrade --install python-api . \
   -n dev \
   -f values.yaml \
-  -f values-api.yaml
+  -f values-api.yaml \
+  --set image.tag=<sha-corto> \
+  --set secret.apiToken="<token>"
 ```
 
 ### Despliegue frontend
@@ -323,7 +342,8 @@ cd python-app
 helm upgrade --install python-web . \
   -n dev \
   -f values.yaml \
-  -f values-web.yaml
+  -f values-web.yaml \
+  --set image.tag=<sha-corto>
 ```
 
 ### Validación de templates
@@ -424,6 +444,14 @@ Validación:
 kubectl get secrets -n dev
 kubectl describe secret python-api-python-app-secret -n dev
 ```
+
+Desde la incorporación de Gitleaks al CI, el token ya no se guarda en texto plano en `values-api.yaml`. Se inyecta en el momento del despliegue:
+
+```bash
+helm upgrade --install python-api . -n dev -f values.yaml -f values-api.yaml --set secret.apiToken="<token>"
+```
+
+El valor de ejemplo anterior, ya presente en el historial de commits, está documentado y acotado en `.gitleaks.toml` como hallazgo conocido y sin riesgo real.
 
 > No se deben publicar valores reales de Secrets, kubeconfigs completos, certificados, tokens ni credenciales en el repositorio.
 
@@ -599,7 +627,8 @@ La pipeline se ejecuta en:
 flowchart TD
     PR[Pull Request] --> Workflow[GitHub Actions Workflow]
     Workflow --> Checkout[Checkout repository]
-    Checkout --> Python[Set up Python]
+    Checkout --> Gitleaks[Gitleaks secret scan]
+    Gitleaks --> Python[Set up Python]
     Python --> Dependencies[Install dependencies]
     Dependencies --> Syntax[Validate Python syntax]
     Syntax --> Tests[Run pytest]
@@ -607,9 +636,12 @@ flowchart TD
     HelmSetup --> HelmLint[Helm lint]
     HelmLint --> RenderAPI[Render API Helm templates]
     RenderAPI --> RenderWeb[Render Web Helm templates]
-    RenderWeb --> BuildBackend[Build backend Docker image]
+    RenderWeb --> TrivyFS[Trivy filesystem scan]
+    TrivyFS --> TrivyConfig[Trivy config scan]
+    TrivyConfig --> BuildBackend[Build backend Docker image]
     BuildBackend --> BuildFrontend[Build frontend Docker image]
-    BuildFrontend --> Result[CI result]
+    BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
+    TrivyImages --> Result[CI result]
 ```
 
 ### Validaciones actuales
@@ -624,6 +656,10 @@ La CI valida:
 * Render de templates Helm para Web.
 * Build de imagen Docker backend.
 * Build de imagen Docker frontend.
+* Gitleaks: detección de secretos en el historial de commits.
+* Trivy filesystem scan.
+* Trivy config scan sobre el chart Helm.
+* Trivy image scan de ambas imágenes Docker.
 
 Esto permite detectar errores antes de integrar cambios en las ramas principales del proyecto.
 
@@ -639,6 +675,8 @@ main
     ├── feature/hpa-autoscaling
     ├── feature/persistent-volumes
     ├── feature/github-actions-devsecops-ci
+    ├── feature/security-scans
+    ├── feature/ghcr-registry
     └── feature/readme
 ```
 
@@ -723,6 +761,9 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 * Usar Secrets para datos sensibles dentro de Kubernetes.
 * Evitar exponer el valor real de los Secrets desde la API.
 * Validar cambios mediante Pull Requests y GitHub Actions.
+* Escaneo automático de secretos (Gitleaks) e imágenes/config (Trivy) en cada PR.
+* Contenedores con `runAsNonRoot`, `readOnlyRootFilesystem` y capabilities mínimas por defecto en el chart.
+* Eliminación de herramientas de build (`pip`, `setuptools`, `wheel`) de la imagen en runtime.
 
 ---
 
@@ -745,8 +786,8 @@ Tailscale                  ✅
 Lens                       ✅
 pytest                     ✅
 GitHub Actions CI          ✅
-DevSecOps security scans   ⏳
-GHCR                       ⏳
+DevSecOps security scans   ✅
+GHCR                       ✅
 Prometheus/Grafana         ⏳
 ArgoCD GitOps              ⏳
 ```
@@ -757,14 +798,14 @@ ArgoCD GitOps              ⏳
 
 Próximas mejoras previstas:
 
-### Seguridad en CI
+### Seguridad en CI ✅ (completado)
 
 * Gitleaks para detección de secretos.
 * Trivy filesystem scan.
 * Trivy config scan para manifests Kubernetes/Helm.
 * Trivy image scan para imágenes Docker.
 
-### Registry
+### Registry ✅ (completado)
 
 * Publicación de imágenes en GitHub Container Registry.
 * Uso de tags basados en commit SHA.
