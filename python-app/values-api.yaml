@@ -1,8 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: python-k8s-app
-  tag: "2.8"
+  repository: ghcr.io/oscarhidalgo93/python-k8s-app
   pullPolicy: IfNotPresent
 
 service:
