@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: python-k8s-app
-  tag: "2.0"
+  repository: ""
+  tag: "" #Se pasa obligatoriamente por --set image.tag=<sha> en el despliegue.
   pullPolicy: IfNotPresent
 
 #Buenas practicas de seguridad (scan de Trivy))

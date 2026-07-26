@@ -10,8 +10,7 @@ on:
   push:
     branches:
       - develop
-      - main
-      - feature/ghcr-registry
+      - main     
   pull_request:
     branches:
       - develop
@@ -108,7 +107,7 @@ jobs:
 
       - name: Build backend Docker image
         run: |
-          IMAGE_TAG=${GITHUB_SHA::7}        
+          IMAGE_TAG=${GITHUB_SHA::7}     
           docker build -t ghcr.io/oscarhidalgo93/python-k8s-app:$IMAGE_TAG .
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
