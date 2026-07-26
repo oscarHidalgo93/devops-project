@@ -425,6 +425,14 @@ kubectl get secrets -n dev
 kubectl describe secret python-api-python-app-secret -n dev
 ```
 
+Desde la incorporación de Gitleaks al CI, el token ya no se guarda en texto plano en `values-api.yaml`. Se inyecta en el momento del despliegue:
+
+```bash
+helm upgrade --install python-api . -n dev -f values.yaml -f values-api.yaml --set secret.apiToken="<token>"
+```
+
+El valor de ejemplo anterior, ya presente en el historial de commits, está documentado y acotado en `.gitleaks.toml` como hallazgo conocido y sin riesgo real.
+
 > No se deben publicar valores reales de Secrets, kubeconfigs completos, certificados, tokens ni credenciales en el repositorio.
 
 ---
@@ -599,7 +607,8 @@ La pipeline se ejecuta en:
 flowchart TD
     PR[Pull Request] --> Workflow[GitHub Actions Workflow]
     Workflow --> Checkout[Checkout repository]
-    Checkout --> Python[Set up Python]
+    Checkout --> Gitleaks[Gitleaks secret scan]
+    Gitleaks --> Python[Set up Python]
     Python --> Dependencies[Install dependencies]
     Dependencies --> Syntax[Validate Python syntax]
     Syntax --> Tests[Run pytest]
@@ -607,9 +616,12 @@ flowchart TD
     HelmSetup --> HelmLint[Helm lint]
     HelmLint --> RenderAPI[Render API Helm templates]
     RenderAPI --> RenderWeb[Render Web Helm templates]
-    RenderWeb --> BuildBackend[Build backend Docker image]
+    RenderWeb --> TrivyFS[Trivy filesystem scan]
+    TrivyFS --> TrivyConfig[Trivy config scan]
+    TrivyConfig --> BuildBackend[Build backend Docker image]
     BuildBackend --> BuildFrontend[Build frontend Docker image]
-    BuildFrontend --> Result[CI result]
+    BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
+    TrivyImages --> Result[CI result]
 ```
 
 ### Validaciones actuales
@@ -624,6 +636,10 @@ La CI valida:
 * Render de templates Helm para Web.
 * Build de imagen Docker backend.
 * Build de imagen Docker frontend.
+* Gitleaks: detección de secretos en el historial de commits.
+* Trivy filesystem scan.
+* Trivy config scan sobre el chart Helm.
+* Trivy image scan de ambas imágenes Docker.
 
 Esto permite detectar errores antes de integrar cambios en las ramas principales del proyecto.
 
@@ -639,6 +655,7 @@ main
     ├── feature/hpa-autoscaling
     ├── feature/persistent-volumes
     ├── feature/github-actions-devsecops-ci
+    ├── feature/security-scans
     └── feature/readme
 ```
 
@@ -723,6 +740,9 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 * Usar Secrets para datos sensibles dentro de Kubernetes.
 * Evitar exponer el valor real de los Secrets desde la API.
 * Validar cambios mediante Pull Requests y GitHub Actions.
+* Escaneo automático de secretos (Gitleaks) e imágenes/config (Trivy) en cada PR.
+* Contenedores con `runAsNonRoot`, `readOnlyRootFilesystem` y capabilities mínimas por defecto en el chart.
+* Eliminación de herramientas de build (`pip`, `setuptools`, `wheel`) de la imagen en runtime.
 
 ---
 
@@ -745,7 +765,7 @@ Tailscale                  ✅
 Lens                       ✅
 pytest                     ✅
 GitHub Actions CI          ✅
-DevSecOps security scans   ⏳
+DevSecOps security scans   ✅
 GHCR                       ⏳
 Prometheus/Grafana         ⏳
 ArgoCD GitOps              ⏳
@@ -757,7 +777,7 @@ ArgoCD GitOps              ⏳
 
 Próximas mejoras previstas:
 
-### Seguridad en CI
+### Seguridad en CI ✅ (completado)
 
 * Gitleaks para detección de secretos.
 * Trivy filesystem scan.
