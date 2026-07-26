@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[[allowlist]]
+description = "Token de desarrollo ficticio, sin valor real, presente en el historial de esta rama antes de moverlo a --set. No es un secreto que rotar."
+paths = [
+  '''python-app/values-api\.yaml'''
+]
+regexes = [
+  '''dev-token-1234567890''',
+]
