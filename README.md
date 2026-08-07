@@ -249,7 +249,7 @@ Responsabilidades:
 
 ### Backend
 
-Construcción de imagen backend:
+Construcción de imagen backend (uso local/desarrollo):
 
 ```bash
 docker build -t python-k8s-app:latest .
@@ -257,14 +257,25 @@ docker build -t python-k8s-app:latest .
 
 ### Frontend
 
-Construcción de imagen frontend:
+Construcción de imagen frontend (uso local/desarrollo):
 
 ```bash
 cd frontend
 docker build -t frontend-app:latest .
 ```
 
-En el estado actual del laboratorio, las imágenes pueden construirse localmente y cargarse en el runtime de K3s si no se utiliza un registry externo.
+### Publicación en GHCR (GitHub Container Registry)
+
+El pipeline de CI construye y publica automáticamente ambas imágenes en GHCR en cada push a `develop`/`main`, usando como tag el SHA corto del commit:
+
+```text
+ghcr.io/oscarhidalgo93/python-k8s-app:<sha-corto>
+ghcr.io/oscarhidalgo93/frontend-app:<sha-corto>
+```
+
+El push a GHCR ocurre **después** de que la imagen pase el escaneo de Trivy y **solo** en eventos `push` (no en Pull Requests), para no publicar imágenes de ramas que aún no se han integrado. Ambos paquetes son públicos, por lo que K3s puede hacer `pull` sin necesidad de credenciales.
+
+Con esto, el flujo manual de construir la imagen en la VM, exportarla con `docker save` e importarla en containerd con `sudo k3s ctr images import` **ya no es necesario** para desplegar en el cluster.
 
 ---
 
@@ -304,6 +315,12 @@ values-api.yaml   → configuración específica del backend
 values-web.yaml   → configuración específica del frontend
 ```
 
+El tag de la imagen (`image.tag`) **no se define en los ficheros de values** — se pasa de forma explícita en el momento del despliegue con `--set`, usando el SHA corto del commit que se quiere desplegar (el mismo que generó y publicó el CI en GHCR):
+
+```bash
+git rev-parse --short HEAD
+```
+
 ### Despliegue backend
 
 ```bash
@@ -312,7 +329,9 @@ cd python-app
 helm upgrade --install python-api . \
   -n dev \
   -f values.yaml \
-  -f values-api.yaml
+  -f values-api.yaml \
+  --set image.tag=<sha-corto> \
+  --set secret.apiToken="<token>"
 ```
 
 ### Despliegue frontend
@@ -323,7 +342,8 @@ cd python-app
 helm upgrade --install python-web . \
   -n dev \
   -f values.yaml \
-  -f values-web.yaml
+  -f values-web.yaml \
+  --set image.tag=<sha-corto>
 ```
 
 ### Validación de templates
@@ -656,6 +676,7 @@ main
     ├── feature/persistent-volumes
     ├── feature/github-actions-devsecops-ci
     ├── feature/security-scans
+    ├── feature/ghcr-registry
     └── feature/readme
 ```
 
@@ -766,7 +787,7 @@ Lens                       ✅
 pytest                     ✅
 GitHub Actions CI          ✅
 DevSecOps security scans   ✅
-GHCR                       ⏳
+GHCR                       ✅
 Prometheus/Grafana         ⏳
 ArgoCD GitOps              ⏳
 ```
@@ -784,7 +805,7 @@ Próximas mejoras previstas:
 * Trivy config scan para manifests Kubernetes/Helm.
 * Trivy image scan para imágenes Docker.
 
-### Registry
+### Registry ✅ (completado)
 
 * Publicación de imágenes en GitHub Container Registry.
 * Uso de tags basados en commit SHA.
