@@ -8,6 +8,7 @@ app = Flask(__name__)
 CORS(app)
 metrics = PrometheusMetrics(app, path="/metrics")
 
+
 def get_counter_file():
     return os.getenv("COUNTER_FILE", "/data/counter.txt")
 
