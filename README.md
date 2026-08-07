@@ -105,6 +105,7 @@ flowchart LR
 * Python
 * Flask
 * Flask-CORS
+* prometheus-flask-exporter
 * HTML
 * JavaScript
 * Nginx
@@ -131,7 +132,17 @@ flowchart LR
 
 * Helm
 * GitHub Actions
+* GitHub Container Registry
 * GitFlow simplificado
+
+### Observabilidad
+
+* Prometheus
+* Grafana
+* Prometheus Operator (ServiceMonitor)
+* Alertmanager
+* kube-state-metrics
+* node-exporter
 
 ### Herramientas de operación
 
@@ -157,6 +168,11 @@ Python-project/
 ├── frontend/
 │   ├── Dockerfile
 │   └── index.html
+│
+├── infra/
+│   └── monitoring/
+│       ├── api-servicemonitor.yaml
+│       └── grafana-ingress.yaml
 │
 ├── python-app/
 │   ├── templates/
@@ -677,6 +693,7 @@ main
     ├── feature/github-actions-devsecops-ci
     ├── feature/security-scans
     ├── feature/ghcr-registry
+    ├── feature/monitoring
     └── feature/readme
 ```
 
@@ -731,7 +748,110 @@ Durante la validación del HPA, Lens permitió observar visualmente el escalado 
 
 ---
 
-## 22. Troubleshooting trabajado
+## 22. Observabilidad con Prometheus y Grafana
+
+La observabilidad se despliega mediante el chart `kube-prometheus-stack`, que incluye Prometheus, Grafana, Alertmanager, kube-state-metrics y node-exporter.
+
+Namespace utilizado:
+
+```text
+monitoring
+```
+
+### Instalación
+
+```bash
+kubectl create namespace monitoring
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n monitoring \
+  --set prometheus.prometheusSpec.resources.requests.cpu=100m \
+  --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
+  --set prometheus.prometheusSpec.resources.limits.memory=1Gi \
+  --set grafana.resources.requests.cpu=50m \
+  --set grafana.resources.requests.memory=128Mi
+```
+
+> La contraseña de Grafana no se define en ningún fichero del repositorio. Se pasa mediante `--set grafana.adminPassword` en el despliegue o se recupera del Secret que genera el chart automáticamente.
+
+### Acceso a Grafana
+
+Grafana se expone mediante Ingress de Traefik:
+
+```text
+grafana.local
+```
+
+El manifiesto está en `infra/monitoring/grafana-ingress.yaml`:
+
+```bash
+kubectl apply -f infra/monitoring/grafana-ingress.yaml
+```
+
+Resolución local en el equipo cliente:
+
+```text
+<TAILSCALE_VM_IP> grafana.local
+```
+
+El chart incluye dashboards de Kubernetes preconfigurados, que permiten visualizar CPU, memoria y estado de los pods por namespace. Esto complementa el HPA con métricas reales en lugar de solo la salida de `kubectl get hpa`.
+
+### Métricas de la aplicación
+
+La API está instrumentada con `prometheus-flask-exporter`, que expone automáticamente métricas de peticiones, latencia y códigos de respuesta:
+
+```text
+GET /metrics
+```
+
+Inicialización en `main.py`:
+
+```python
+from prometheus_flask_exporter import PrometheusMetrics
+
+app = Flask(__name__)
+CORS(app)
+metrics = PrometheusMetrics(app, path="/metrics")
+```
+
+### ServiceMonitor
+
+Para que Prometheus descubra y consulte la API automáticamente se utiliza un `ServiceMonitor` (CRD del Prometheus Operator), definido en `infra/monitoring/api-servicemonitor.yaml`:
+
+```bash
+kubectl apply -f infra/monitoring/api-servicemonitor.yaml
+```
+
+Cuatro elementos deben coincidir para que el descubrimiento funcione:
+
+* La label `release: kube-prometheus-stack`, sin la cual el Operator ignora el ServiceMonitor.
+* El `namespaceSelector`, ya que el ServiceMonitor vive en `monitoring` y el Service en `dev`.
+* El `selector.matchLabels`, que debe coincidir con las labels del Service.
+* El nombre del puerto (`port: http`), por lo que el Service define `name: http` en su template.
+
+### Validación
+
+```bash
+kubectl get servicemonitor -n monitoring
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+```
+
+En `http://localhost:9090` → `Status` → `Target health` deben aparecer los targets de la API en estado `UP`.
+
+Ejemplo de consulta en Grafana o Prometheus:
+
+```text
+rate(flask_http_request_total[5m])
+```
+
+> Nota: el endpoint `/metrics` queda accesible a través del Ingress de la API. En un entorno productivo conviene servirlo en un puerto separado no expuesto públicamente, o restringir el acceso mediante NetworkPolicy para que solo Prometheus pueda consultarlo, ya que expone información sobre rutas, tráfico y errores de la aplicación.
+
+---
+
+## 23. Troubleshooting trabajado
 
 Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 
@@ -744,10 +864,12 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Entornos Python gestionados por el sistema operativo.
 * Importación de módulos en pytest.
 * Validación de PVC y persistencia tras recreación de pods.
+* Visibilidad de paquetes en GHCR y errores `ImagePullBackOff`.
+* Descubrimiento de targets en Prometheus: la label `release`, el `namespaceSelector` y el nombre del puerto del Service deben coincidir para que el ServiceMonitor genere targets.
 
 ---
 
-## 23. Buenas prácticas de seguridad aplicadas
+## 24. Buenas prácticas de seguridad aplicadas
 
 El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
@@ -767,7 +889,7 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
 ---
 
-## 24. Alcance técnico actual
+## 25. Alcance técnico actual
 
 El laboratorio incluye actualmente:
 
@@ -788,13 +910,13 @@ pytest                     ✅
 GitHub Actions CI          ✅
 DevSecOps security scans   ✅
 GHCR                       ✅
-Prometheus/Grafana         ⏳
+Prometheus/Grafana         ✅
 ArgoCD GitOps              ⏳
 ```
 
 ---
 
-## 25. Roadmap
+## 26. Roadmap
 
 Próximas mejoras previstas:
 
@@ -811,7 +933,7 @@ Próximas mejoras previstas:
 * Uso de tags basados en commit SHA.
 * Eliminación del flujo manual `docker save` + `k3s ctr images import`.
 
-### Observabilidad
+### Observabilidad ✅ (completado)
 
 * Prometheus.
 * Grafana.
@@ -836,7 +958,7 @@ Próximas mejoras previstas:
 
 ---
 
-## 26. Conclusión
+## 27. Conclusión
 
 Este proyecto representa una base práctica y progresiva para trabajar conceptos de Platform Engineering y DevSecOps mediante construcción real.
 
