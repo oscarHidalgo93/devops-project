@@ -144,9 +144,16 @@ flowchart LR
 * kube-state-metrics
 * node-exporter
 
+### GitOps
+
+* ArgoCD
+* Application CRD
+* Auto-sync con selfHeal y prune
+
 ### Herramientas de operación
 
 * kubectl
+* k9s
 * Lens
 * Tailscale
 
@@ -170,6 +177,10 @@ Python-project/
 │   └── index.html
 │
 ├── infra/
+│   ├── argocd/
+│   │   ├── app-python.yaml
+│   │   └── argocd-ingress.yaml
+│   │
 │   └── monitoring/
 │       ├── api-servicemonitor.yaml
 │       └── grafana-ingress.yaml
@@ -657,8 +668,12 @@ flowchart TD
     TrivyConfig --> BuildBackend[Build backend Docker image]
     BuildBackend --> BuildFrontend[Build frontend Docker image]
     BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
-    TrivyImages --> Result[CI result]
+    TrivyImages --> PushGHCR[Push imágenes a GHCR]
+    PushGHCR --> UpdateTag[Commit del nuevo tag en values-api.yaml]
+    UpdateTag --> ArgoCD[ArgoCD detecta y despliega]
 ```
+
+> Los pasos de push a GHCR y de actualización del tag solo se ejecutan en eventos `push` sobre `develop` o `main`, nunca en Pull Requests.
 
 ### Validaciones actuales
 
@@ -679,6 +694,8 @@ La CI valida:
 
 Esto permite detectar errores antes de integrar cambios en las ramas principales del proyecto.
 
+Además, en push sobre `develop` la pipeline publica las imágenes en GHCR y actualiza el tag en `values-api.yaml`, cerrando el ciclo hacia el despliegue automático mediante ArgoCD.
+
 ---
 
 ## 19. GitFlow utilizado
@@ -694,6 +711,10 @@ main
     ├── feature/security-scans
     ├── feature/ghcr-registry
     ├── feature/monitoring
+    ├── feature/argocd
+    ├── feature/hpa-argocd-fix
+    ├── feature/argocd-autosync
+    ├── feature/ci-ima-tag
     └── feature/readme
 ```
 
@@ -851,7 +872,108 @@ rate(flask_http_request_total[5m])
 
 ---
 
-## 23. Troubleshooting trabajado
+## 23. GitOps con ArgoCD
+
+ArgoCD introduce el modelo declarativo: el estado deseado del cluster vive en Git y ArgoCD lo reconcilia de forma continua. El despliegue deja de ser una acción manual (`helm upgrade`) y pasa a ser consecuencia de un commit.
+
+Namespace utilizado:
+
+```text
+argocd
+```
+
+### Instalación
+
+```bash
+kubectl create namespace argocd
+
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+
+helm install argocd argo/argo-cd -n argocd
+```
+
+ArgoCD sirve HTTPS por defecto. Para exponerlo detrás de Traefik sin doble terminación TLS se habilita el modo inseguro, aceptable en este laboratorio porque todo el tráfico viaja cifrado por Tailscale:
+
+```bash
+helm upgrade argocd argo/argo-cd -n argocd --reuse-values \
+  --set configs.params."server\.insecure"=true
+```
+
+### Acceso
+
+Ingress definido en `infra/argocd/argocd-ingress.yaml`:
+
+```text
+argocd.local
+```
+
+Contraseña inicial del usuario `admin`:
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+```
+
+### Application
+
+La Application está declarada en `infra/argocd/app-python.yaml` y vigila el directorio `python-app/` de la rama `develop`:
+
+```yaml
+spec:
+  source:
+    repoURL: https://github.com/oscarHidalgo93/devops-project.git
+    targetRevision: develop
+    path: python-app
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-api.yaml
+  destination:
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
+
+* **`selfHeal`** revierte automáticamente cualquier cambio hecho directamente sobre el cluster.
+* **`prune`** elimina recursos que ya no existen en Git. El PVC lleva la anotación `argocd.argoproj.io/sync-options: Prune=false` para que nunca se borre y no se pierdan los datos persistentes.
+
+### Convivencia con el HPA
+
+Con autoescalado activo, el HPA y ArgoCD competían por `spec.replicas`: ArgoCD aplicaba el valor de Git y el HPA lo sobrescribía, dejando la Application permanentemente `OutOfSync`. Con `selfHeal` habilitado, ArgoCD habría forzado además una reducción de réplicas en mitad de un pico de carga.
+
+La solución es no declarar en Git lo que gestiona otro controlador. El template del Deployment omite el campo cuando el autoescalado está activo:
+
+```yaml
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+```
+
+### Actualización automática del tag de imagen
+
+Tras publicar la imagen en GHCR, el pipeline actualiza `image.tag` en `values-api.yaml` y lo commitea. ArgoCD detecta ese commit y despliega sin intervención manual:
+
+```text
+push a develop → CI construye y publica imagen → CI commitea el nuevo tag
+               → ArgoCD detecta el commit → reconcilia el cluster
+```
+
+El mensaje del commit incluye `[skip ci]` para evitar que el propio commit dispare de nuevo el workflow y se genere un bucle.
+
+Como efecto secundario, el historial de Git pasa a ser el registro de despliegues: cada commit `chore: update image tag to <sha>` corresponde a una versión desplegada, y revertirlo equivale a hacer rollback.
+
+### Limitaciones actuales
+
+* La Application solo gestiona el backend. El frontend sigue desplegándose con Helm de forma manual.
+* La propia Application se aplica con `kubectl apply`, por lo que un cambio en su manifiesto no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
+* El valor de `secret.apiToken` está vacío en Git, por lo que cada sincronización sobrescribe el Secret con una cadena vacía. Pendiente de resolver con gestión declarativa de secretos.
+
+---
+
+## 24. Troubleshooting trabajado
 
 Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 
@@ -866,10 +988,14 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Validación de PVC y persistencia tras recreación de pods.
 * Visibilidad de paquetes en GHCR y errores `ImagePullBackOff`.
 * Descubrimiento de targets en Prometheus: la label `release`, el `namespaceSelector` y el nombre del puerto del Service deben coincidir para que el ServiceMonitor genere targets.
+* Conflicto entre HPA y ArgoCD por la propiedad de `spec.replicas`.
+* Ventana de estabilización del HPA y comportamiento del escalado descendente con métricas de memoria.
+* Fallos silenciosos en pipelines: un `sed` que no encuentra coincidencias no devuelve error, por lo que conviene verificar el resultado explícitamente.
+* Vulnerabilidades en la imagen base que aparecen sin cambios en el código, al actualizarse la base de datos del escáner.
 
 ---
 
-## 24. Buenas prácticas de seguridad aplicadas
+## 25. Buenas prácticas de seguridad aplicadas
 
 El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
@@ -889,7 +1015,7 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
 ---
 
-## 25. Alcance técnico actual
+## 26. Alcance técnico actual
 
 El laboratorio incluye actualmente:
 
@@ -911,12 +1037,12 @@ GitHub Actions CI          ✅
 DevSecOps security scans   ✅
 GHCR                       ✅
 Prometheus/Grafana         ✅
-ArgoCD GitOps              ⏳
+ArgoCD GitOps              ✅
 ```
 
 ---
 
-## 26. Roadmap
+## 27. Roadmap
 
 Próximas mejoras previstas:
 
@@ -941,12 +1067,24 @@ Próximas mejoras previstas:
 * Métricas de la API.
 * Relación entre HPA y métricas reales.
 
-### GitOps
+### GitOps ✅ (completado)
 
 * ArgoCD.
 * Sincronización desde Git.
-* Separación de repositorio app/config si aplica.
 * Despliegue declarativo.
+* Actualización automática del tag de imagen desde CI.
+
+Pendiente dentro de este bloque:
+
+* Patrón app-of-apps para que ArgoCD gestione también sus propios manifiestos.
+* Application para el frontend, que aún se despliega con Helm manual.
+* Separación de repositorio app/config si el proyecto crece.
+
+### Gestión declarativa de secretos
+
+* Sealed Secrets para cifrar valores sensibles y versionarlos en Git.
+* Eliminación del `--set secret.apiToken` en el despliegue.
+* Aplicación del mismo mecanismo a otras credenciales del cluster.
 
 ### Supply Chain Security
 
@@ -958,7 +1096,7 @@ Próximas mejoras previstas:
 
 ---
 
-## 27. Conclusión
+## 28. Conclusión
 
 Este proyecto representa una base práctica y progresiva para trabajar conceptos de Platform Engineering y DevSecOps mediante construcción real.
 
