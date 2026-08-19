@@ -150,6 +150,12 @@ flowchart LR
 * Application CRD
 * Auto-sync con selfHeal y prune
 
+### Gestión de secretos
+
+* Sealed Secrets
+* kubeseal
+* Gitleaks
+
 ### Herramientas de operación
 
 * kubectl
@@ -181,9 +187,12 @@ Python-project/
 │   │   ├── app-python.yaml
 │   │   └── argocd-ingress.yaml
 │   │
-│   └── monitoring/
-│       ├── api-servicemonitor.yaml
-│       └── grafana-ingress.yaml
+│   ├── monitoring/
+│   │   ├── api-servicemonitor.yaml
+│   │   └── grafana-ingress.yaml
+│   │
+│   └── sealed-secrets/
+│       └── controller.yaml
 │
 ├── python-app/
 │   ├── templates/
@@ -192,7 +201,7 @@ Python-project/
 │   │   ├── hpa.yaml
 │   │   ├── ingress.yaml
 │   │   ├── pvc.yaml
-│   │   ├── secret.yaml
+│   │   ├── sealedsecret.yaml
 │   │   └── service.yaml
 │   │
 │   ├── Chart.yaml
@@ -472,13 +481,86 @@ kubectl get secrets -n dev
 kubectl describe secret python-api-python-app-secret -n dev
 ```
 
-Desde la incorporación de Gitleaks al CI, el token ya no se guarda en texto plano en `values-api.yaml`. Se inyecta en el momento del despliegue:
+### Evolución de la gestión de secretos
 
-```bash
-helm upgrade --install python-api . -n dev -f values.yaml -f values-api.yaml --set secret.apiToken="<token>"
+El proyecto ha pasado por tres etapas, cada una resolviendo el problema de la anterior:
+
+```text
+1. apiToken en texto plano en values-api.yaml   → detectable por Gitleaks
+2. Inyección con --set en el despliegue         → fuera de Git, paso manual
+3. Sealed Secrets                               → cifrado en Git, automático
 ```
 
-El valor de ejemplo anterior, ya presente en el historial de commits, está documentado y acotado en `.gitleaks.toml` como hallazgo conocido y sin riesgo real.
+La segunda etapa sacó el valor del repositorio, pero dejó una pieza del estado fuera de Git: había que recordar el `--set` en cada despliegue, y ArgoCD sobrescribía el Secret con una cadena vacía en cada sincronización.
+
+### Sealed Secrets
+
+Sealed Secrets utiliza criptografía asimétrica: `kubeseal` cifra con la clave pública del cluster y solo el controlador, con la clave privada que nunca sale de él, puede descifrar.
+
+Esto permite versionar el secreto **cifrado** en un repositorio público sin riesgo, porque su seguridad no depende de que el repositorio sea privado.
+
+```text
+Secret en claro (local, efímero)
+      │  kubeseal cifra con la clave pública
+      ▼
+SealedSecret ─────────────► Git (seguro, aunque sea público)
+                                  │  ArgoCD lo aplica
+                                  ▼
+                       Controlador descifra con la clave privada
+                                  ▼
+                          Secret normal en el cluster
+```
+
+Instalación del controlador, versionado en `infra/sealed-secrets/controller.yaml`:
+
+```bash
+kubectl apply -f infra/sealed-secrets/controller.yaml
+```
+
+Cliente `kubeseal`:
+
+```bash
+curl -sLO https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.39.0/kubeseal-0.39.0-linux-amd64.tar.gz
+tar -xzf kubeseal-0.39.0-linux-amd64.tar.gz kubeseal
+sudo install -m 755 kubeseal /usr/local/bin/kubeseal
+```
+
+Generar y sellar un secreto, sin que el valor en claro llegue nunca al repositorio:
+
+```bash
+kubectl create secret generic python-api-python-app-secret \
+  --namespace dev \
+  --from-literal=API_TOKEN='<token>' \
+  --dry-run=client -o yaml > /tmp/secret-claro.yaml
+
+kubeseal --format yaml --controller-namespace kube-system \
+  < /tmp/secret-claro.yaml > python-app/templates/sealedsecret.yaml
+
+rm /tmp/secret-claro.yaml
+```
+
+El resultado se almacena en `python-app/templates/sealedsecret.yaml` y ArgoCD lo despliega como cualquier otro recurso del chart.
+
+Validación:
+
+```bash
+kubectl get secret python-api-python-app-secret -n dev -o jsonpath='{.data.API_TOKEN}' | base64 -d
+```
+
+### Consideraciones
+
+* **El nombre importa.** El controlador crea el Secret con el mismo nombre que el SealedSecret, que debe coincidir con el que espera el Deployment.
+* **El sellado está atado a un namespace y un nombre.** Un SealedSecret copiado a otro namespace no se descifra, lo que evita que alguien reutilice el fichero cifrado en un espacio bajo su control.
+* **Gitleaks marca los SealedSecrets como falso positivo.** El contenido cifrado tiene alta entropía por definición, indistinguible de un token real. Está acotado por ruta en `.gitleaks.toml` con su justificación.
+* **La clave privada del controlador es irremplazable.** Si se pierde el cluster sin haberla respaldado, todos los SealedSecrets quedan ilegibles:
+
+```bash
+kubectl get secret -n kube-system -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > sealed-secrets-key-backup.yaml
+```
+
+> Ese fichero es la llave maestra de todos los secretos del cluster y no debe subirse nunca al repositorio.
+
+* **Sealed Secrets protege el camino hacia Git, no el secreto dentro del cluster.** Una vez descifrado es un Secret normal, legible por cualquiera con permisos de lectura en ese namespace. Restringir ese acceso es trabajo de RBAC.
 
 > No se deben publicar valores reales de Secrets, kubeconfigs completos, certificados, tokens ni credenciales en el repositorio.
 
@@ -715,6 +797,7 @@ main
     ├── feature/hpa-argocd-fix
     ├── feature/argocd-autosync
     ├── feature/ci-ima-tag
+    ├── feature/sealed-secrets
     └── feature/readme
 ```
 
@@ -992,6 +1075,8 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Ventana de estabilización del HPA y comportamiento del escalado descendente con métricas de memoria.
 * Fallos silenciosos en pipelines: un `sed` que no encuentra coincidencias no devuelve error, por lo que conviene verificar el resultado explícitamente.
 * Vulnerabilidades en la imagen base que aparecen sin cambios en el código, al actualizarse la base de datos del escáner.
+* Falsos positivos de Gitleaks sobre contenido cifrado: la alta entropía de un SealedSecret es indistinguible de un token real.
+* Alcance real de `selfHeal`: revierte modificaciones sobre campos declarados en Git, pero no elimina campos que Git nunca menciona.
 
 ---
 
@@ -1038,6 +1123,7 @@ DevSecOps security scans   ✅
 GHCR                       ✅
 Prometheus/Grafana         ✅
 ArgoCD GitOps              ✅
+Sealed Secrets             ✅
 ```
 
 ---
@@ -1074,17 +1160,10 @@ Próximas mejoras previstas:
 * Despliegue declarativo.
 * Actualización automática del tag de imagen desde CI.
 
-Pendiente dentro de este bloque:
-
-* Patrón app-of-apps para que ArgoCD gestione también sus propios manifiestos.
-* Application para el frontend, que aún se despliega con Helm manual.
-* Separación de repositorio app/config si el proyecto crece.
-
-### Gestión declarativa de secretos
+### Gestión declarativa de secretos ✅ (completado)
 
 * Sealed Secrets para cifrar valores sensibles y versionarlos en Git.
 * Eliminación del `--set secret.apiToken` en el despliegue.
-* Aplicación del mismo mecanismo a otras credenciales del cluster.
 
 ### Supply Chain Security
 
@@ -1093,6 +1172,40 @@ Pendiente dentro de este bloque:
 * Attestations.
 * Hardening de GitHub Actions.
 * Pinning de actions por SHA.
+
+### Retoques y mejoras finales
+
+Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para cerrarlas al final. Ninguna es un descuido: en cada caso se valoró el coste frente al beneficio en el contexto de un laboratorio.
+
+**Cerrar el modelo GitOps**
+
+* Patrón *app-of-apps*: una Application raíz que gestione `infra/`, de forma que los manifiestos de ArgoCD, Prometheus y Sealed Secrets dejen de aplicarse con `kubectl apply` manual.
+* Application para el frontend, que aún se despliega con Helm de forma manual.
+* Evaluar `ServerSideApply` para que `selfHeal` detecte campos añadidos fuera de Git, que actualmente pasan desapercibidos.
+* Sincronizar ArgoCD desde `main` y separar entornos (`develop` → `dev`, `main` → `prod`), acercando el laboratorio a un flujo de promoción real.
+
+**Policy as code**
+
+* Kyverno u OPA Gatekeeper para validar manifiestos en admisión.
+* NetworkPolicies entre namespaces.
+* Servir `/metrics` en un puerto independiente no expuesto por el Ingress y restringirlo al namespace de monitorización. Actualmente es accesible a través del Ingress de la API.
+
+**Infraestructura como código**
+
+* Ansible para provisionar la VM, K3s y sus dependencias de forma reproducible. Hoy el cluster se monta a mano.
+
+**Calidad y mantenimiento**
+
+* `revisionHistoryLimit` en el Deployment para evitar la acumulación de ReplicaSets antiguos.
+* Smoke test en el CI que ejecute el contenedor construido, ya que `docker build` valida la sintaxis pero nunca comprueba que la imagen arranque.
+* Reconstrucción periódica programada de las imágenes, para incorporar parches de la base sin depender de que haya cambios en el código.
+* Ampliar los tests a casos límite: variables de entorno no definidas y fichero de contador corrupto.
+* Migrar Flask del servidor de desarrollo a gunicorn.
+* Fijar las imágenes base por digest, requisito previo para SBOM y firma.
+
+**Evolución de la gestión de secretos**
+
+* Vault con External Secrets Operator. A diferencia de Sealed Secrets, el secreto no vive en Git ni siquiera cifrado: el repositorio solo contiene una referencia, lo que permite rotar credenciales sin tocar el código.
 
 ---
 
