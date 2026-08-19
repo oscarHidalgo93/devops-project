@@ -40,9 +40,6 @@ config:
   appName: ""
   environment: ""
 
-secret:
-  apiToken: ""
-
 persistance:
   enabled: false
   size: 1Gi

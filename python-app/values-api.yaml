@@ -11,11 +11,6 @@ service:
   
 containerPort: 8080
 
-#Secret: en siguientes versiones se dejara de subir secretos realmente sensibles a git, esto es una prueba.
-#Se recomienda usar un gestor de secretos como Hashicorp Vault o AWS Secrets Manager.
-secret:
-  apiToken: ""
-
 persistance:
   enabled: true
   size: 1Gi
