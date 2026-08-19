@@ -10,14 +10,14 @@ on:
   push:
     branches:
       - develop
-      - main     
+      - main   
   pull_request:
     branches:
       - develop
       - main
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: read
   packages: write
 
@@ -145,3 +145,20 @@ jobs:
         if: github.event_name == 'push'
         run: |
           docker push ghcr.io/oscarhidalgo93/frontend-app:${{ env.IMAGE_TAG }}
+
+      - name: Update image Tag in Git
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sed -i "s|^  tag: .*|  tag: \"${{ env.IMAGE_TAG }}\"|" python-app/values-api.yaml
+          grep -q "^  tag: \"${IMAGE_TAG}\"" python-app/values-api.yaml || { echo "ERROR: el tag no se actualizó"; exit 1; }
+          git add python-app/values-api.yaml
+          git diff --staged --quiet || git commit -m "chore: update image tag to ${IMAGE_TAG} [skip ci]"
+          git push
+
+
+          
+          
+
+          
