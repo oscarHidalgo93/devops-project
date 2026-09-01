@@ -24,7 +24,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ required "image.tag es obligatorio".Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.containerSecurityContext }}
           securityContext:
@@ -33,8 +33,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{include "python-app.fullname" . }}-config
+            {{- if .Values.existingSecret }}
             - secretRef:
-                name: {{include "python-app.fullname" . }}-secret
+                name: {{ .Values.existingSecret }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.containerPort }}
           resources:
