@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/oscarhidalgo93/python-k8s-app
-  tag: "0beb9b3"
+  tag: "cff41a3"
   pullPolicy: IfNotPresent
 
 service:
@@ -61,5 +61,7 @@ extraVolumes:
     
 extraVolumeMounts:
   - name: tmp
-    mountPath: /tmp        
+    mountPath: /tmp
+
+existingSecret: "python-api-python-app-secret"
 
