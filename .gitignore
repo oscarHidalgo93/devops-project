@@ -17,3 +17,10 @@ __pycache__/
 
 # Kubernetes
 *.log
+
+# Credenciales (prevención; la detección la cubre gitleaks en CI)
+*.key
+*.pem
+kubeconfig
+*.kubeconfig
+.env
