@@ -41,10 +41,13 @@ La siguiente imagen resume la arquitectura general del laboratorio y el flujo de
 
 ![Arquitectura general del proyecto](docs/images/architecture-overview.png)
 
-Esta vista combina los dos bloques principales del proyecto:
+Esta vista combina los tres bloques principales del proyecto:
 
-* La arquitectura de ejecución sobre Kubernetes.
-* El flujo de integración continua basado en GitHub Actions.
+* La arquitectura de ejecución sobre Kubernetes, común a los dos entornos: el cluster de la VM y el cluster local sobre WSL2, ambos alcanzables por Tailscale.
+* La plataforma que acompaña a la aplicación dentro del propio cluster: Prometheus y Grafana en el namespace `monitoring`, y ArgoCD en `argocd`. Prometheus descubre la API mediante un `ServiceMonitor`.
+* El flujo de integración continua sobre GitHub Actions, que valida, escanea, publica las imágenes en GHCR y actualiza el tag en Git para que ArgoCD sincronice el cluster.
+
+El escalado del backend lo gobierna un HPA con objetivos de CPU y memoria, representado en el diagrama por la flecha punteada que apunta al Deployment.
 
 ---
 
@@ -53,7 +56,7 @@ Esta vista combina los dos bloques principales del proyecto:
 ```mermaid
 flowchart TD
     User[Usuario / Navegador] --> Hosts[Resolución local: api.local / web.local]
-    Hosts --> Tailscale[Tailscale IP de la VM]
+    Hosts --> Tailscale[Tailscale]
     Tailscale --> Traefik[Traefik Ingress Controller]
 
     Traefik --> WebIngress[Ingress web.local]
@@ -75,8 +78,10 @@ flowchart TD
     ApiPod2 --> Secret
     ApiPod2 --> PVC
 
+    Secret --> Sealed[SealedSecret descifrado por el controlador]
+
     PVC --> PV[PersistentVolume]
-    PV --> Disk[Disco local VM - local-path]
+    PV --> Disk[Disco del nodo - local-path]
 ```
 
 ---
@@ -91,8 +96,8 @@ flowchart LR
     ApiCall --> Flask["Backend Flask API"]
     Flask --> Env["Variables de entorno"]
     Env --> CM["ConfigMap"]
-    Env --> Sec["Secret]"
-    Flask --> Data['/data/counter.txt']
+    Env --> Sec["Secret"]
+    Flask --> Data["/data/counter.txt"]
     Data --> PVC["PVC"]
 ```
 

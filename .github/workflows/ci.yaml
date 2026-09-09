@@ -151,9 +151,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          sed -i "s|^  tag: .*|  tag: \"${{ env.IMAGE_TAG }}\"|" python-app/values-api.yaml
-          grep -q "^  tag: \"${IMAGE_TAG}\"" python-app/values-api.yaml || { echo "ERROR: el tag no se actualizó"; exit 1; }
-          git add python-app/values-api.yaml
+          for f in python-app/values-api.yaml python-app/values-web.yaml; do
+            sed -i "s|^  tag: .*|  tag: \"${IMAGE_TAG}\"|" "$f"
+            grep -q "^  tag: \"${IMAGE_TAG}\"" "$f" || { echo "ERROR: el tag no se actualizó en $f"; exit 1; }
+            git add "$f"
+          done
           git diff --staged --quiet || git commit -m "chore: update image tag to ${IMAGE_TAG} [skip ci]"
           git push
 
