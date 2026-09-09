@@ -53,7 +53,7 @@ Esta vista combina los dos bloques principales del proyecto:
 ```mermaid
 flowchart TD
     User[Usuario / Navegador] --> Hosts[Resolución local: api.local / web.local]
-    Hosts --> Tailscale[Tailscale IP de la VM]
+    Hosts --> Tailscale[Tailscale]
     Tailscale --> Traefik[Traefik Ingress Controller]
 
     Traefik --> WebIngress[Ingress web.local]
@@ -75,8 +75,10 @@ flowchart TD
     ApiPod2 --> Secret
     ApiPod2 --> PVC
 
+    Secret --> Sealed[SealedSecret descifrado por el controlador]
+
     PVC --> PV[PersistentVolume]
-    PV --> Disk[Disco local VM - local-path]
+    PV --> Disk[Disco del nodo - local-path]
 ```
 
 ---
@@ -91,8 +93,8 @@ flowchart LR
     ApiCall --> Flask["Backend Flask API"]
     Flask --> Env["Variables de entorno"]
     Env --> CM["ConfigMap"]
-    Env --> Sec["Secret]"
-    Flask --> Data['/data/counter.txt']
+    Env --> Sec["Secret"]
+    Flask --> Data["/data/counter.txt"]
     Data --> PVC["PVC"]
 ```
 
