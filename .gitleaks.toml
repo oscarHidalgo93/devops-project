@@ -6,7 +6,7 @@ description = "Excepciones documentadas: token ficticio en el historial y Sealed
 paths = [
   '''python-app/values-api\.yaml''',
   '''python-app/templates/sealedsecret\.yaml''',
-  '''infra/sealed-secrets/.*-secret-.*\.yaml''',
+  '''infra/sealed-secrets/.*secret.*\.yaml''',
 ]
 regexes = [
   '''dev-token-1234567890''',

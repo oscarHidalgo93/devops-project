@@ -190,6 +190,9 @@ Python-project/
 ├── infra/
 │   ├── argocd/
 │   │   ├── app-python.yaml
+│   │   ├── app-sealed-secrets-controller.yaml
+│   │   ├── app-secrets-k3s-lab-wsl.yaml
+│   │   ├── app-secrets-ubuntu-devops.yaml
 │   │   └── argocd-ingress.yaml
 │   │
 │   ├── monitoring/
@@ -197,6 +200,11 @@ Python-project/
 │   │   └── grafana-ingress.yaml
 │   │
 │   └── sealed-secrets/
+│       ├── clusters/
+│       │   ├── k3s-lab-wsl/
+│       │   │   └── api-secret.yaml
+│       │   └── ubuntu-devops/
+│       │       └── api-secret.yaml
 │       └── controller.yaml
 │
 ├── python-app/
@@ -206,7 +214,6 @@ Python-project/
 │   │   ├── hpa.yaml
 │   │   ├── ingress.yaml
 │   │   ├── pvc.yaml
-│   │   ├── sealedsecret.yaml
 │   │   └── service.yaml
 │   │
 │   ├── Chart.yaml
@@ -1081,11 +1088,23 @@ El mensaje del commit incluye `[skip ci]` para evitar que el propio commit dispa
 
 Como efecto secundario, el historial de Git pasa a ser el registro de despliegues: cada commit `chore: update image tag to <sha>` corresponde a una versión desplegada, y revertirlo equivale a hacer rollback.
 
+### Applications de infraestructura
+
+El controlador de Sealed Secrets y los secretos sellados se gestionan también por GitOps, con una Application por responsabilidad:
+
+* `sealed-secrets-controller` sincroniza `infra/sealed-secrets` sobre el namespace `kube-system`, con la recursión desactivada para que solo aplique `controller.yaml`.
+* `secrets-<cluster>` sincroniza `infra/sealed-secrets/clusters/<cluster>` sobre `dev`. Cada cluster aplica únicamente la Application que le corresponde.
+
+La separación por carpetas es funcional, no estética: los dos SealedSecrets declaran el mismo nombre y el mismo namespace —porque el sellado está atado a ese par— y sincronizar el directorio completo los haría colisionar entre sí.
+
+La Application del controlador lleva `prune: false` de forma deliberada. Su manifiesto incluye el CRD `SealedSecret`, y una poda provocada por una reorganización de rutas borraría ese CRD y, en cascada, todos los SealedSecrets del cluster.
+
+No hay ordenación entre Applications, por lo que la de los secretos puede fallar en su primera sincronización si el CRD todavía no existe. ArgoCD reintenta y converge por sí solo.
+
 ### Limitaciones actuales
 
 * La Application solo gestiona el backend. El frontend sigue desplegándose con Helm de forma manual.
-* La propia Application se aplica con `kubectl apply`, por lo que un cambio en su manifiesto no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
-* El valor de `secret.apiToken` está vacío en Git, por lo que cada sincronización sobrescribe el Secret con una cadena vacía. Pendiente de resolver con gestión declarativa de secretos.
+* Las Applications se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
 
 ---
 
@@ -1145,7 +1164,7 @@ El laboratorio mantiene por tanto un fichero sellado por entorno, generado contr
 kubectl create secret generic <NOMBRE_DEL_SECRET> -n dev \
   --from-literal=API_TOKEN=<API_TOKEN_VALUE> \
   --dry-run=client -o yaml \
-  | kubeseal --format yaml --controller-namespace kube-system > infra/sealed-secrets/<ENTORNO>.yaml
+  | kubeseal --format yaml --controller-namespace kube-system > infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml
 ```
 
 `--dry-run=client` construye el objeto en local y lo emite por la salida estándar sin llegar a la API, de modo que el valor en claro nunca se escribe en el cluster.
