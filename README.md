@@ -1177,6 +1177,7 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * El porcentaje de utilización que evalúa un HPA se calcula sobre los `requests`, no sobre los `limits`.
 * `helm lint` valida estructura y sintaxis, no semántica: un chart que pasa el lint puede renderizar una imagen sin tag o un recurso con el nombre de otro release. `helm template` sí lo detecta, y `required` traslada el fallo del cluster al render.
 * Mover un recurso fuera del path que vigila una Application no lo desvincula de ella: conserva su anotación de seguimiento y una sincronización con `prune` lo elimina. Desarmar la sincronización automática antes de reestructurar el repositorio evita que la reconciliación ejecute un cambio a medio hacer.
+* Una lista de excepciones definida por rutas concretas se rompe en silencio al mover ficheros: la entrada deja de coincidir sin que nada falle, y el hueco solo se manifiesta cuando vuelve a haber contenido que analizar. Acotarla por patrón resiste mejor la reorganización del repositorio.
 
 ---
 
