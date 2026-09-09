@@ -61,5 +61,7 @@ extraVolumes:
     
 extraVolumeMounts:
   - name: tmp
-    mountPath: /tmp        
+    mountPath: /tmp
+
+existingSecret: "python-api-python-app-secret"
 
