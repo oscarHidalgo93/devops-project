@@ -1,0 +1,7 @@
+# Normaliza los finales de línea a LF en el índice, sea cual sea el sistema
+# desde el que se commitee. Evita que git en Windows convierta a CRLF ficheros
+# que acaban ejecutándose dentro de contenedores Linux.
+* text=auto eol=lf
+
+# Binarios: que git no intente normalizarlos nunca.
+*.png binary
