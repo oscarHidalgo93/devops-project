@@ -550,6 +550,7 @@ kubectl get secret python-api-python-app-secret -n dev -o jsonpath='{.data.API_T
 ### Consideraciones
 
 * **El nombre importa.** El controlador crea el Secret con el mismo nombre que el SealedSecret, que debe coincidir con el que espera el Deployment.
+* **La clave de sellado es propia de cada cluster.** Se genera en el primer arranque del controlador, por lo que un mismo fichero cifrado no sirve para dos entornos: cada cluster necesita su propio sellado del mismo secreto.
 * **El sellado está atado a un namespace y un nombre.** Un SealedSecret copiado a otro namespace no se descifra, lo que evita que alguien reutilice el fichero cifrado en un espacio bajo su control.
 * **Gitleaks marca los SealedSecrets como falso positivo.** El contenido cifrado tiene alta entropía por definición, indistinguible de un token real. Está acotado por ruta en `.gitleaks.toml` con su justificación.
 * **La clave privada del controlador es irremplazable.** Si se pierde el cluster sin haberla respaldado, todos los SealedSecrets quedan ilegibles:
@@ -828,6 +829,25 @@ tls-san:
 
 Esto permite usar `kubectl` y Lens desde el equipo cliente contra el cluster K3s de la VM.
 
+### Nodo WSL2
+
+El cluster local se incorpora al mismo tailnet, de modo que ambos entornos se alcanzan por el mismo mecanismo y con una identidad que no depende de la red subyacente:
+
+```bash
+sudo systemctl enable --now tailscaled
+sudo tailscale up --hostname=<NODE_NAME>
+```
+
+El certificado del API Server se amplía declarando los nombres adicionales en `/etc/rancher/k3s/config.yaml`:
+
+```yaml
+tls-san:
+  - <TAILSCALE_WSL_IP>
+  - <MAGICDNS_NAME>
+```
+
+K3s regenera el certificado al reiniciar el servicio y conserva los SAN anteriores, por lo que las vías de acceso previas siguen siendo válidas. Con `tailscaled` habilitado en systemd, la identidad del nodo sobrevive a los reinicios de la distro.
+
 > Por seguridad, este README no publica IPs reales, tokens, certificados, kubeconfigs completos ni rutas personales del entorno local.
 
 ---
@@ -849,6 +869,14 @@ Permite revisar:
 * Métricas.
 
 Durante la validación del HPA, Lens permitió observar visualmente el escalado de la API hasta 5 pods.
+
+El cliente apunta al nombre estable del cluster en lugar de a una dirección:
+
+```yaml
+server: https://<MAGICDNS_NAME>:6443
+```
+
+Conviene configurar Lens para que **sincronice un fichero de kubeconfig** en disco (*Preferences → Kubernetes → Kubeconfig Syncs*) en vez de pegar su contenido. Una copia pegada queda congelada en el momento de pegarla y no recoge cambios posteriores, y pegar dos veces el mismo fichero duplica todos sus contextos en el catálogo.
 
 ---
 
@@ -1056,7 +1084,72 @@ Como efecto secundario, el historial de Git pasa a ser el registro de despliegue
 
 ---
 
-## 24. Troubleshooting trabajado
+## 24. Segundo entorno: K3s local sobre WSL2
+
+Al entorno de la VM se suma un segundo cluster local sobre WSL2, que permite iterar sin depender de la máquina remota y sirve de banco de pruebas para cambios que después se llevan al entorno principal.
+
+Ambos comparten repositorio y chart, pero son clusters **independientes**: cada uno tiene su propio kubeconfig, su propia clave de sellado y su propia identidad de red.
+
+```mermaid
+flowchart LR
+    Cliente[kubectl / Lens / Navegador] --> Tailnet{Tailnet}
+    Tailnet --> VM[VM Ubuntu<br/>K3s remoto]
+    Tailnet --> WSL[WSL2<br/>K3s local]
+    VM --> SecVM[SealedSecret<br/>clave de la VM]
+    WSL --> SecWSL[SealedSecret<br/>clave local]
+```
+
+### Instalación
+
+K3s se instala de forma nativa dentro de la distro, con systemd gestionando el servicio y la versión fijada para mantener paridad con el cluster de la VM:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.36.3+k3s1" INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -
+```
+
+Se descarta k3d frente a K3s nativo de forma deliberada. Los nodos de k3d son contenedores y su ciclo de vida lo gobierna el runtime de contenedores; un K3s bajo systemd expone la capa de operación real —`systemctl`, `journalctl`, unidades que fallan y se reintentan solas— que forma parte del objetivo del laboratorio.
+
+El flag `--write-kubeconfig-mode 644` permite leer `/etc/rancher/k3s/k3s.yaml` sin `sudo`. Es asumible en un entorno de un solo usuario, pero no es una práctica trasladable a un servidor compartido: ese fichero contiene credenciales de `cluster-admin`.
+
+### Kubeconfig con varios contextos
+
+El kubeconfig del usuario fusiona los clusters disponibles con nombres explícitos, de modo que el contexto activo sea siempre una decisión consciente:
+
+```bash
+kubectl config get-contexts
+kubectl config use-context <CONTEXTO>
+```
+
+Comprobar `kubectl config current-context` antes de operar es el primer reflejo cuando un resultado no cuadra. Los comandos que crean o destruyen recursos admiten `--context` explícito, lo que convierte un error de ventana en un fallo inofensivo en lugar de un cambio sobre el cluster equivocado.
+
+### Acceso desde el cliente
+
+El reenvío de `localhost` de WSL2 no funciona de forma fiable en el equipo utilizado: las conexiones desde Windows a `127.0.0.1` sobre los puertos del cluster no llegan a destino, pese a estar `localhostForwarding=true` en `.wslconfig`. Se descartaron con datos dos causas habituales —rangos de puertos reservados por WinNAT y una versión antigua de WSL— sin llegar a identificar la raíz.
+
+En lugar de perseguir el síntoma con un script que actualice en cada arranque la IP que reparte el NAT, se opta por eliminar la dependencia: Tailscale dentro de la distro dota al nodo de una identidad de red estable, y la dirección efímera deja de importar.
+
+El motivo por el que ese reenvío tampoco alcanza a Traefik queda recogido en el apartado de troubleshooting: `hostPort` no abre un socket en escucha.
+
+### Sellado de secretos por cluster
+
+La clave privada de Sealed Secrets se genera en el primer arranque del controlador y **pertenece a ese cluster**. Un SealedSecret preparado para la VM no se descifra en el cluster local aunque el namespace y el nombre coincidan.
+
+El laboratorio mantiene por tanto un fichero sellado por entorno, generado contra la clave correspondiente:
+
+```bash
+kubectl create secret generic <NOMBRE_DEL_SECRET> -n dev \
+  --from-literal=API_TOKEN=<API_TOKEN_VALUE> \
+  --dry-run=client -o yaml \
+  | kubeseal --format yaml --controller-namespace kube-system > infra/sealed-secrets/<ENTORNO>.yaml
+```
+
+`--dry-run=client` construye el objeto en local y lo emite por la salida estándar sin llegar a la API, de modo que el valor en claro nunca se escribe en el cluster.
+
+La alternativa sería compartir la clave privada entre ambos entornos para reutilizar un único fichero. Se descarta de forma consciente: copiar claves privadas entre clusters hace que comprometer uno comprometa el otro, y contradice el modelo de seguridad que la propia herramienta plantea.
+
+---
+
+## 25. Troubleshooting trabajado
 
 Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 
@@ -1077,10 +1170,17 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Vulnerabilidades en la imagen base que aparecen sin cambios en el código, al actualizarse la base de datos del escáner.
 * Falsos positivos de Gitleaks sobre contenido cifrado: la alta entropía de un SealedSecret es indistinguible de un token real.
 * Alcance real de `selfHeal`: revierte modificaciones sobre campos declarados en Git, pero no elimina campos que Git nunca menciona.
+* Una línea de `/proc/mounts` con un campo de más impide arrancar al kubelet: su validación del sistema espera exactamente seis campos y no tolera un séptimo. En WSL2 lo provoca la integración de Docker Desktop al montar una ruta de Windows con espacios sin escapar.
+* `hostPort` se implementa con reglas DNAT de iptables, no con un socket en escucha. Los mecanismos que detectan puertos abiertos para reenviarlos, como el `localhostForwarding` de WSL2, no llegan a verlo.
+* Un `rollout status` agotado por plazo no equivale a un despliegue fallido. La ausencia de un evento `Failed` junto a un `Pulling` reciente indica lentitud, no avería, y la diferencia cambia por completo la acción siguiente.
+* La marca de tiempo de un evento pesa tanto como su severidad: un `Warning` del HPA anterior al arranque de los contenedores es ruido de inicialización, no un fallo vigente.
+* El porcentaje de utilización que evalúa un HPA se calcula sobre los `requests`, no sobre los `limits`.
+* `helm lint` valida estructura y sintaxis, no semántica: un chart que pasa el lint puede renderizar una imagen sin tag o un recurso con el nombre de otro release. `helm template` sí lo detecta, y `required` traslada el fallo del cluster al render.
+* Mover un recurso fuera del path que vigila una Application no lo desvincula de ella: conserva su anotación de seguimiento y una sincronización con `prune` lo elimina. Desarmar la sincronización automática antes de reestructurar el repositorio evita que la reconciliación ejecute un cambio a medio hacer.
 
 ---
 
-## 25. Buenas prácticas de seguridad aplicadas
+## 26. Buenas prácticas de seguridad aplicadas
 
 El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
@@ -1100,7 +1200,7 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
 ---
 
-## 26. Alcance técnico actual
+## 27. Alcance técnico actual
 
 El laboratorio incluye actualmente:
 
@@ -1124,11 +1224,12 @@ GHCR                       ✅
 Prometheus/Grafana         ✅
 ArgoCD GitOps              ✅
 Sealed Secrets             ✅
+K3s local sobre WSL2       ✅
 ```
 
 ---
 
-## 27. Roadmap
+## 28. Roadmap
 
 Próximas mejoras previstas:
 
@@ -1209,7 +1310,7 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 
 ---
 
-## 28. Conclusión
+## 29. Conclusión
 
 Este proyecto representa una base práctica y progresiva para trabajar conceptos de Platform Engineering y DevSecOps mediante construcción real.
 
