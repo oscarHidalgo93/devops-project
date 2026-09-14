@@ -191,14 +191,17 @@ Python-project/
 │   ├── argocd/
 │   │   ├── clusters/
 │   │   │   ├── k3s-lab-wsl/
-│   │   │   │   ├── app-python.yaml
+│   │   │   │   ├── app-api.yaml
 │   │   │   │   ├── app-sealed-secrets-controller.yaml
-│   │   │   │   └── app-secrets-k3s-lab-wsl.yaml
+│   │   │   │   ├── app-secrets-k3s-lab-wsl.yaml
+│   │   │   │   └── app-web.yaml
 │   │   │   └── ubuntu-devops/
-│   │   │       ├── app-python.yaml
+│   │   │       ├── app-api.yaml
 │   │   │       ├── app-sealed-secrets-controller.yaml
-│   │   │       └── app-secrets-ubuntu-devops.yaml
-│   │   └── argocd-ingress.yaml
+│   │   │       ├── app-secrets-ubuntu-devops.yaml
+│   │   │       └── app-web.yaml
+│   │   ├── argocd-ingress.yaml
+│   │   └── argocd-values.yaml
 │   │
 │   ├── monitoring/
 │   │   ├── api-servicemonitor.yaml
@@ -1031,15 +1034,24 @@ kubectl create namespace argocd
 helm repo add argo https://argoproj.github.io/argo-helm
 helm repo update
 
-helm install argocd argo/argo-cd -n argocd
+helm install argocd argo/argo-cd -n argocd \
+  --version 10.3.0 \
+  -f infra/argocd/argocd-values.yaml
 ```
 
-ArgoCD sirve HTTPS por defecto. Para exponerlo detrás de Traefik sin doble terminación TLS se habilita el modo inseguro, aceptable en este laboratorio porque todo el tráfico viaja cifrado por Tailscale:
+La versión del chart se fija para que ambos clusters ejecuten la misma. Sin ese argumento, cada instalación recibe la última publicada ese día y los entornos divergen sin que nadie lo haya decidido.
 
-```bash
-helm upgrade argocd argo/argo-cd -n argocd --reuse-values \
-  --set configs.params."server\.insecure"=true
+ArgoCD sirve HTTPS por defecto. Traefik ya termina TLS por delante, de modo que sin desactivarlo habría doble terminación. La opción se declara en `infra/argocd/argocd-values.yaml`, que no es una Application sino la configuración del chart que instala el propio ArgoCD:
+
+```yaml
+configs:
+  params:
+    server.insecure: true
 ```
+
+Es aceptable en este laboratorio porque el tráfico viaja cifrado por Tailscale hasta el nodo.
+
+El cluster de la VM se instaló antes de existir ese fichero, aplicando la opción con `helm upgrade --reuse-values --set configs.params."server\.insecure"=true`. El resultado en el cluster es equivalente, pero deja el release en su segunda revisión y la configuración vive únicamente dentro del cluster: reinstalarlo exige recordar el comando. Declararla en un fichero versionado elimina esa dependencia de la memoria, y de paso evita escapar el punto de `server.insecure`, que en `--set` se interpreta como un nivel de anidamiento.
 
 ### Acceso
 
@@ -1055,9 +1067,12 @@ Contraseña inicial del usuario `admin`:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-### Application
+### Applications de la aplicación
 
-La Application está declarada en `infra/argocd/app-python.yaml` y vigila el directorio `python-app/` de la rama `develop`:
+Cada release tiene su propia Application. Ambas comparten chart y se diferencian en el nombre y en los `valueFiles`:
+
+* `python-api` en `infra/argocd/clusters/<cluster>/app-api.yaml`, con `values.yaml` y `values-api.yaml`.
+* `python-web` en `infra/argocd/clusters/<cluster>/app-web.yaml`, con `values.yaml` y `values-web.yaml`.
 
 ```yaml
 spec:
@@ -1076,6 +1091,8 @@ spec:
       prune: true
       selfHeal: true
 ```
+
+Al aplicar una Application sobre un release que ya se había desplegado con Helm a mano, ArgoCD lo adopta en lugar de duplicarlo: compara el manifiesto renderizado desde Git con el estado vivo, sin atender a quién lo creó. Si difieren —por ejemplo porque el tag de imagen del cluster es anterior al que fija Git— reconcilia la diferencia y el Deployment rueda.
 
 * **`selfHeal`** revierte automáticamente cualquier cambio hecho directamente sobre el cluster.
 * **`prune`** elimina recursos que ya no existen en Git. El PVC lleva la anotación `argocd.argoproj.io/sync-options: Prune=false` para que nunca se borre y no se pierdan los datos persistentes.
@@ -1129,7 +1146,6 @@ El orden al aplicarlas en un cluster que ya tenía la Application del backend no
 
 ### Limitaciones actuales
 
-* La Application solo gestiona el backend. El frontend sigue desplegándose con Helm de forma manual.
 * Las Applications se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
 
 ---
@@ -1228,6 +1244,8 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * `helm lint` valida estructura y sintaxis, no semántica: un chart que pasa el lint puede renderizar una imagen sin tag o un recurso con el nombre de otro release. `helm template` sí lo detecta, y `required` traslada el fallo del cluster al render.
 * Mover un recurso fuera del path que vigila una Application no lo desvincula de ella: conserva su anotación de seguimiento y una sincronización con `prune` lo elimina. Desarmar la sincronización automática antes de reestructurar el repositorio evita que la reconciliación ejecute un cambio a medio hacer.
 * Una lista de excepciones definida por rutas concretas se rompe en silencio al mover ficheros: la entrada deja de coincidir sin que nada falle, y el hueco solo se manifiesta cuando vuelve a haber contenido que analizar. Acotarla por patrón resiste mejor la reorganización del repositorio.
+* El estado `Degraded` de una Application puede ser transitorio: aparece mientras un Deployment no tiene todas sus réplicas listas, incluidas las de un despliegue en curso. Conviene comprobar si converge antes de intervenir.
+* Un Deployment de una sola réplica y sin readiness probe queda sin servicio durante un rollout: la estrategia por defecto admite un 25% de indisponibilidad, que sobre una réplica es el 100%, y sin readiness probe el pod nuevo se da por listo antes de aceptar conexiones.
 * `kubectl apply` sobre un recurso existente restaura cada campo declarado en el fichero, incluidos los retirados con `kubectl patch`. Un ajuste manual sobre una Application de ArgoCD —desarmar `syncPolicy.automated`, por ejemplo— dura exactamente hasta el siguiente `apply` de su manifiesto, y conviene planificar el orden con eso en mente.
 
 ---
