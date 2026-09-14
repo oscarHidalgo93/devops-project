@@ -189,7 +189,15 @@ Python-project/
 │
 ├── infra/
 │   ├── argocd/
-│   │   ├── app-python.yaml
+│   │   ├── clusters/
+│   │   │   ├── k3s-lab-wsl/
+│   │   │   │   ├── app-python.yaml
+│   │   │   │   ├── app-sealed-secrets-controller.yaml
+│   │   │   │   └── app-secrets-k3s-lab-wsl.yaml
+│   │   │   └── ubuntu-devops/
+│   │   │       ├── app-python.yaml
+│   │   │       ├── app-sealed-secrets-controller.yaml
+│   │   │       └── app-secrets-ubuntu-devops.yaml
 │   │   └── argocd-ingress.yaml
 │   │
 │   ├── monitoring/
@@ -197,6 +205,11 @@ Python-project/
 │   │   └── grafana-ingress.yaml
 │   │
 │   └── sealed-secrets/
+│       ├── clusters/
+│       │   ├── k3s-lab-wsl/
+│       │   │   └── api-secret.yaml
+│       │   └── ubuntu-devops/
+│       │       └── api-secret.yaml
 │       └── controller.yaml
 │
 ├── python-app/
@@ -206,7 +219,6 @@ Python-project/
 │   │   ├── hpa.yaml
 │   │   ├── ingress.yaml
 │   │   ├── pvc.yaml
-│   │   ├── sealedsecret.yaml
 │   │   └── service.yaml
 │   │
 │   ├── Chart.yaml
@@ -813,6 +825,19 @@ Flujo de trabajo:
 feature/* → Pull Request → develop → main
 ```
 
+### Ramas y entornos
+
+Desde que el laboratorio cuenta con dos clusters, cada rama principal corresponde a un entorno:
+
+```text
+develop  →  cluster local (WSL2)   desarrollo: recibe cada feature al mergearse
+main     →  VM                     demostración: estable, solo cambia al promocionar
+```
+
+Cada cluster ejecuta su propio ArgoCD, con Applications que apuntan a su rama mediante `targetRevision`. Promocionar una versión a la demo consiste en mergear `develop` en `main`: el merge que ya cerraba el flujo pasa a tener un efecto operativo, y trabajar sobre `develop` deja de poder romper la demo.
+
+Las imágenes no se reconstruyen al promocionar. La CI las publica en GHCR y fija su tag en los values al integrar en `develop`; el merge lleva ese tag a `main`, y la VM despliega una imagen que ya existe y ya fue escaneada.
+
 ---
 
 ## 20. Acceso remoto con Tailscale
@@ -1081,11 +1106,31 @@ El mensaje del commit incluye `[skip ci]` para evitar que el propio commit dispa
 
 Como efecto secundario, el historial de Git pasa a ser el registro de despliegues: cada commit `chore: update image tag to <sha>` corresponde a una versión desplegada, y revertirlo equivale a hacer rollback.
 
+### Applications de infraestructura
+
+El controlador de Sealed Secrets y los secretos sellados se gestionan también por GitOps, con una Application por responsabilidad:
+
+* `sealed-secrets-controller` sincroniza `infra/sealed-secrets` sobre el namespace `kube-system`, con la recursión desactivada para que solo aplique `controller.yaml`.
+* `secrets-<cluster>` sincroniza `infra/sealed-secrets/clusters/<cluster>` sobre `dev`. Cada cluster aplica únicamente la Application que le corresponde.
+
+La separación por carpetas es funcional, no estética: los dos SealedSecrets declaran el mismo nombre y el mismo namespace —porque el sellado está atado a ese par— y sincronizar el directorio completo los haría colisionar entre sí.
+
+La Application del controlador lleva `prune: false` de forma deliberada. Su manifiesto incluye el CRD `SealedSecret`, y una poda provocada por una reorganización de rutas borraría ese CRD y, en cascada, todos los SealedSecrets del cluster.
+
+No hay ordenación entre Applications, por lo que la de los secretos puede fallar en su primera sincronización si el CRD todavía no existe. ArgoCD reintenta y converge por sí solo.
+
+### Una carpeta de Applications por cluster
+
+Los manifiestos de las Applications viven en `infra/argocd/clusters/<cluster>/`. Son ficheros casi idénticos que difieren en `targetRevision`: `main` para la VM y `develop` para el cluster local. Cada cluster aplica únicamente su carpeta.
+
+Duplicar un fichero por un solo campo es el coste aceptado para dos clusters: explícito y revisable en un diff. Con más clusters, la herramienta adecuada sería un `ApplicationSet` que genere las Applications a partir de una lista.
+
+El orden al aplicarlas en un cluster que ya tenía la Application del backend no es indiferente. `kubectl apply` sobre una Application existente restaura todos los campos del manifiesto, incluido un `syncPolicy.automated` retirado a mano con `kubectl patch`. Primero el controlador y los secretos; después, comprobar que el SealedSecret ha pasado a manos de la Application nueva; y solo entonces la del backend, que al aplicarse rearma la sincronización automática con poda.
+
 ### Limitaciones actuales
 
 * La Application solo gestiona el backend. El frontend sigue desplegándose con Helm de forma manual.
-* La propia Application se aplica con `kubectl apply`, por lo que un cambio en su manifiesto no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
-* El valor de `secret.apiToken` está vacío en Git, por lo que cada sincronización sobrescribe el Secret con una cadena vacía. Pendiente de resolver con gestión declarativa de secretos.
+* Las Applications se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
 
 ---
 
@@ -1145,7 +1190,7 @@ El laboratorio mantiene por tanto un fichero sellado por entorno, generado contr
 kubectl create secret generic <NOMBRE_DEL_SECRET> -n dev \
   --from-literal=API_TOKEN=<API_TOKEN_VALUE> \
   --dry-run=client -o yaml \
-  | kubeseal --format yaml --controller-namespace kube-system > infra/sealed-secrets/<ENTORNO>.yaml
+  | kubeseal --format yaml --controller-namespace kube-system > infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml
 ```
 
 `--dry-run=client` construye el objeto en local y lo emite por la salida estándar sin llegar a la API, de modo que el valor en claro nunca se escribe en el cluster.
@@ -1183,6 +1228,7 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * `helm lint` valida estructura y sintaxis, no semántica: un chart que pasa el lint puede renderizar una imagen sin tag o un recurso con el nombre de otro release. `helm template` sí lo detecta, y `required` traslada el fallo del cluster al render.
 * Mover un recurso fuera del path que vigila una Application no lo desvincula de ella: conserva su anotación de seguimiento y una sincronización con `prune` lo elimina. Desarmar la sincronización automática antes de reestructurar el repositorio evita que la reconciliación ejecute un cambio a medio hacer.
 * Una lista de excepciones definida por rutas concretas se rompe en silencio al mover ficheros: la entrada deja de coincidir sin que nada falle, y el hueco solo se manifiesta cuando vuelve a haber contenido que analizar. Acotarla por patrón resiste mejor la reorganización del repositorio.
+* `kubectl apply` sobre un recurso existente restaura cada campo declarado en el fichero, incluidos los retirados con `kubectl patch`. Un ajuste manual sobre una Application de ArgoCD —desarmar `syncPolicy.automated`, por ejemplo— dura exactamente hasta el siguiente `apply` de su manifiesto, y conviene planificar el orden con eso en mente.
 
 ---
 
