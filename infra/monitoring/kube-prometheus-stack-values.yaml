@@ -1,0 +1,15 @@
+# Values del chart kube-prometheus-stack (no es un manifiesto: no se aplica con kubectl).
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring --create-namespace --version 87.21.0 \
+#     -f infra/monitoring/kube-prometheus-stack-values.yaml
+# El release debe llamarse kube-prometheus-stack: el ServiceMonitor y el Ingress de esta carpeta dependen de ese nombre.
+
+grafana:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
