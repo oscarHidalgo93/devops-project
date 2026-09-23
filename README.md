@@ -205,7 +205,8 @@ Python-project/
 │   │
 │   ├── monitoring/
 │   │   ├── api-servicemonitor.yaml
-│   │   └── grafana-ingress.yaml
+│   │   ├── grafana-ingress.yaml
+│   │   └── kube-prometheus-stack-values.yaml
 │   │
 │   └── sealed-secrets/
 │       ├── clusters/
@@ -926,21 +927,53 @@ monitoring
 ### Instalación
 
 ```bash
-kubectl create namespace monitoring
-
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  -n monitoring \
-  --set prometheus.prometheusSpec.resources.requests.cpu=100m \
-  --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
-  --set prometheus.prometheusSpec.resources.limits.memory=1Gi \
-  --set grafana.resources.requests.cpu=50m \
-  --set grafana.resources.requests.memory=128Mi
+  -n monitoring --create-namespace \
+  --version 87.21.0 \
+  -f infra/monitoring/kube-prometheus-stack-values.yaml
 ```
 
-> La contraseña de Grafana no se define en ningún fichero del repositorio. Se pasa mediante `--set grafana.adminPassword` en el despliegue o se recupera del Secret que genera el chart automáticamente.
+La versión del chart se fija para que ambos clusters ejecuten la misma. Sin ese argumento, cada instalación recibe la última publicada ese día y los entornos divergen sin que nadie lo haya decidido.
+
+Los recursos se declaran en `infra/monitoring/kube-prometheus-stack-values.yaml`, que no es un manifiesto de Kubernetes sino la configuración del chart:
+
+```yaml
+grafana:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
+```
+
+`prometheusSpec` no configura un Deployment: sus valores viajan al objeto `Prometheus`, el recurso personalizado que el Operator traduce después a un StatefulSet. Por eso el render se comprueba sobre ese objeto y no sobre un Deployment.
+
+El stack se instala completo, con Alertmanager y node-exporter incluidos.
+
+### El nombre del release forma parte del contrato
+
+El primer argumento de `helm install` es el nombre del release, y el chart lo utiliza para componer los nombres de sus recursos y la label `release` de los objetos que crea. Dos ficheros del repositorio dependen de que ese nombre sea `kube-prometheus-stack`:
+
+* `grafana-ingress.yaml` enruta hacia el Service `kube-prometheus-stack-grafana`. Con otro nombre, el Ingress apuntaría a un Service inexistente y el acceso devolvería un error del proxy.
+* `api-servicemonitor.yaml` lleva la label `release: kube-prometheus-stack`, que es justo la que selecciona el Prometheus desplegado por el chart. Con otro nombre, el Operator ignoraría el ServiceMonitor sin registrar ningún error: simplemente no habría targets.
+
+El segundo fallo es el más peligroso de los dos, porque nada lo señala hasta que alguien echa en falta una métrica.
+
+### Contraseña de administración de Grafana
+
+No se declara en ningún fichero del repositorio. Cuando no se indica ninguna, el chart genera una aleatoria y la guarda en el Secret `kube-prometheus-stack-grafana`:
+
+```bash
+kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+El valor se calcula al renderizar, de modo que un `helm upgrade` posterior puede sustituirlo y dejar fuera a quien ya se había autenticado. Fijarlo de forma estable sin escribir la contraseña en Git pasa por `grafana.admin.existingSecret`, apuntando a un Secret gestionado como SealedSecret igual que el token de la API.
 
 ### Acceso a Grafana
 
@@ -1004,7 +1037,15 @@ kubectl get servicemonitor -n monitoring
 kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
 ```
 
-En `http://localhost:9090` → `Status` → `Target health` deben aparecer los targets de la API en estado `UP`.
+En `http://localhost:9090` → `Status` → `Target health` deben aparecer los targets de la API en estado `UP`. Sobre WSL2 ese reenvío no alcanza al navegador de Windows, así que la comprobación se hace desde Grafana o consultando la API de Prometheus. Su imagen es *distroless* y no incluye shell ni cliente HTTP, por lo que la consulta se lanza desde un contenedor que sí los tenga:
+
+```bash
+kubectl exec -n monitoring deploy/kube-prometheus-stack-grafana -c grafana -- \
+  curl -sG http://kube-prometheus-stack-prometheus.monitoring:9090/api/v1/query \
+  --data-urlencode 'query=up{namespace="dev"}'
+```
+
+Un valor `1` por cada pod de la API confirma la cadena completa: Service, ServiceMonitor, Operator y Prometheus.
 
 Ejemplo de consulta en Grafana o Prometheus:
 
@@ -1196,6 +1237,34 @@ En lugar de perseguir el síntoma con un script que actualice en cada arranque l
 
 El motivo por el que ese reenvío tampoco alcanza a Traefik queda recogido en el apartado de troubleshooting: `hostPort` no abre un socket en escucha.
 
+### Propagación de montajes
+
+node-exporter monta la raíz del nodo en `/host/root` con `mountPropagation: HostToContainer`, lo que exige que `/` esté marcada como `shared` o `slave` en el host. En una distribución donde systemd arranca como PID 1 desde el principio, la raíz queda `shared`; en WSL2 el sistema de ficheros se monta antes de que systemd tome el control y permanece `private`, de modo que el contenedor ni siquiera llega a crearse:
+
+```text
+path "/" is mounted on "/" but it is not a shared or slave mount
+```
+
+Se resuelve en el nodo y no en el chart, para que el fichero de valores siga sirviendo igual en ambos clusters. Un override de la unidad de K3s marca la raíz antes de arrancar el servicio:
+
+```bash
+sudo systemctl edit k3s
+```
+
+```ini
+[Service]
+ExecStartPre=-/usr/bin/mount --make-rshared /
+```
+
+El guion inicial hace opcional el comando: si fallara, K3s arrancaría igualmente y el cluster no se pierde por un componente de monitorización. La alternativa —desactivar la propagación en los valores del chart— resolvería el síntoma en este cluster a costa de introducir en un fichero compartido un parche que solo aplica a WSL2.
+
+Verificación:
+
+```bash
+findmnt -o TARGET,PROPAGATION /
+systemctl show k3s -p ExecStartPre
+```
+
 ### Sellado de secretos por cluster
 
 La clave privada de Sealed Secrets se genera en el primer arranque del controlador y **pertenece a ese cluster**. Un SealedSecret preparado para la VM no se descifra en el cluster local aunque el namespace y el nombre coincidan.
@@ -1247,6 +1316,12 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * El estado `Degraded` de una Application puede ser transitorio: aparece mientras un Deployment no tiene todas sus réplicas listas, incluidas las de un despliegue en curso. Conviene comprobar si converge antes de intervenir.
 * Un Deployment de una sola réplica y sin readiness probe queda sin servicio durante un rollout: la estrategia por defecto admite un 25% de indisponibilidad, que sobre una réplica es el 100%, y sin readiness probe el pod nuevo se da por listo antes de aceptar conexiones.
 * `kubectl apply` sobre un recurso existente restaura cada campo declarado en el fichero, incluidos los retirados con `kubectl patch`. Un ajuste manual sobre una Application de ArgoCD —desarmar `syncPolicy.automated`, por ejemplo— dura exactamente hasta el siguiente `apply` de su manifiesto, y conviene planificar el orden con eso en mente.
+* Un chart sin `values.schema.json` acepta cualquier clave del fichero de valores y descarta en silencio las que no reconoce: una clave anidada un nivel de más renderiza sin error y deja el recurso sin ese ajuste. El render se comprueba leyendo la salida, no el código de retorno.
+* La raíz de un sistema WSL2 permanece montada como `private`, por lo que los contenedores que piden propagación de montajes no llegan a crearse. Un nodo que se comporta como Linux en todo lo demás puede diferir justo en los detalles que validan el kubelet y el runtime.
+* `systemctl edit` descarta cuanto se escriba por debajo de su marca de corte y, si el resultado queda vacío, cancela la edición sin crear el fichero ni devolver error. El override solo se da por bueno cuando aparece en `systemctl cat` o en `systemctl show -p ExecStartPre`.
+* Un override recién escrito no actúa sobre un servicio que ya está en marcha: sus directivas de arranque no se aplican hasta que la unidad vuelve a iniciarse. Comprobarlo exige reiniciar el servicio o esperar al siguiente arranque.
+* Tras reescribir un commit ya publicado, el `git pull` que sugiere el push rechazado no resuelve nada: fusiona la versión antigua con la nueva y devuelve a la historia el commit que se quería sustituir. La operación correcta es `git push --force-with-lease`, que sobrescribe solo si el remoto sigue donde se esperaba.
+* Grafana bloquea temporalmente al usuario tras varios intentos fallidos y responde entonces con el mismo mensaje que ante una contraseña incorrecta. Su registro distingue lo que la interfaz no: `identity.not-found` cuando el usuario no existe, `invalid password` cuando no coincide la contraseña.
 
 ---
 
