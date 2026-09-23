@@ -191,18 +191,22 @@ Python-project/
 │   ├── argocd/
 │   │   ├── clusters/
 │   │   │   ├── k3s-lab-wsl/
-│   │   │   │   ├── app-python.yaml
+│   │   │   │   ├── app-api.yaml
 │   │   │   │   ├── app-sealed-secrets-controller.yaml
-│   │   │   │   └── app-secrets-k3s-lab-wsl.yaml
+│   │   │   │   ├── app-secrets-k3s-lab-wsl.yaml
+│   │   │   │   └── app-web.yaml
 │   │   │   └── ubuntu-devops/
-│   │   │       ├── app-python.yaml
+│   │   │       ├── app-api.yaml
 │   │   │       ├── app-sealed-secrets-controller.yaml
-│   │   │       └── app-secrets-ubuntu-devops.yaml
-│   │   └── argocd-ingress.yaml
+│   │   │       ├── app-secrets-ubuntu-devops.yaml
+│   │   │       └── app-web.yaml
+│   │   ├── argocd-ingress.yaml
+│   │   └── argocd-values.yaml
 │   │
 │   ├── monitoring/
 │   │   ├── api-servicemonitor.yaml
-│   │   └── grafana-ingress.yaml
+│   │   ├── grafana-ingress.yaml
+│   │   └── kube-prometheus-stack-values.yaml
 │   │
 │   └── sealed-secrets/
 │       ├── clusters/
@@ -923,21 +927,53 @@ monitoring
 ### Instalación
 
 ```bash
-kubectl create namespace monitoring
-
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  -n monitoring \
-  --set prometheus.prometheusSpec.resources.requests.cpu=100m \
-  --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
-  --set prometheus.prometheusSpec.resources.limits.memory=1Gi \
-  --set grafana.resources.requests.cpu=50m \
-  --set grafana.resources.requests.memory=128Mi
+  -n monitoring --create-namespace \
+  --version 87.21.0 \
+  -f infra/monitoring/kube-prometheus-stack-values.yaml
 ```
 
-> La contraseña de Grafana no se define en ningún fichero del repositorio. Se pasa mediante `--set grafana.adminPassword` en el despliegue o se recupera del Secret que genera el chart automáticamente.
+La versión del chart se fija para que ambos clusters ejecuten la misma. Sin ese argumento, cada instalación recibe la última publicada ese día y los entornos divergen sin que nadie lo haya decidido.
+
+Los recursos se declaran en `infra/monitoring/kube-prometheus-stack-values.yaml`, que no es un manifiesto de Kubernetes sino la configuración del chart:
+
+```yaml
+grafana:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+
+prometheus:
+  prometheusSpec:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
+```
+
+`prometheusSpec` no configura un Deployment: sus valores viajan al objeto `Prometheus`, el recurso personalizado que el Operator traduce después a un StatefulSet. Por eso el render se comprueba sobre ese objeto y no sobre un Deployment.
+
+El stack se instala completo, con Alertmanager y node-exporter incluidos.
+
+### El nombre del release forma parte del contrato
+
+El primer argumento de `helm install` es el nombre del release, y el chart lo utiliza para componer los nombres de sus recursos y la label `release` de los objetos que crea. Dos ficheros del repositorio dependen de que ese nombre sea `kube-prometheus-stack`:
+
+* `grafana-ingress.yaml` enruta hacia el Service `kube-prometheus-stack-grafana`. Con otro nombre, el Ingress apuntaría a un Service inexistente y el acceso devolvería un error del proxy.
+* `api-servicemonitor.yaml` lleva la label `release: kube-prometheus-stack`, que es justo la que selecciona el Prometheus desplegado por el chart. Con otro nombre, el Operator ignoraría el ServiceMonitor sin registrar ningún error: simplemente no habría targets.
+
+El segundo fallo es el más peligroso de los dos, porque nada lo señala hasta que alguien echa en falta una métrica.
+
+### Contraseña de administración de Grafana
+
+No se declara en ningún fichero del repositorio. Cuando no se indica ninguna, el chart genera una aleatoria y la guarda en el Secret `kube-prometheus-stack-grafana`:
+
+```bash
+kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+El valor se calcula al renderizar, de modo que un `helm upgrade` posterior puede sustituirlo y dejar fuera a quien ya se había autenticado. Fijarlo de forma estable sin escribir la contraseña en Git pasa por `grafana.admin.existingSecret`, apuntando a un Secret gestionado como SealedSecret igual que el token de la API.
 
 ### Acceso a Grafana
 
@@ -1001,7 +1037,15 @@ kubectl get servicemonitor -n monitoring
 kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
 ```
 
-En `http://localhost:9090` → `Status` → `Target health` deben aparecer los targets de la API en estado `UP`.
+En `http://localhost:9090` → `Status` → `Target health` deben aparecer los targets de la API en estado `UP`. Sobre WSL2 ese reenvío no alcanza al navegador de Windows, así que la comprobación se hace desde Grafana o consultando la API de Prometheus. Su imagen es *distroless* y no incluye shell ni cliente HTTP, por lo que la consulta se lanza desde un contenedor que sí los tenga:
+
+```bash
+kubectl exec -n monitoring deploy/kube-prometheus-stack-grafana -c grafana -- \
+  curl -sG http://kube-prometheus-stack-prometheus.monitoring:9090/api/v1/query \
+  --data-urlencode 'query=up{namespace="dev"}'
+```
+
+Un valor `1` por cada pod de la API confirma la cadena completa: Service, ServiceMonitor, Operator y Prometheus.
 
 Ejemplo de consulta en Grafana o Prometheus:
 
@@ -1031,15 +1075,24 @@ kubectl create namespace argocd
 helm repo add argo https://argoproj.github.io/argo-helm
 helm repo update
 
-helm install argocd argo/argo-cd -n argocd
+helm install argocd argo/argo-cd -n argocd \
+  --version 10.3.0 \
+  -f infra/argocd/argocd-values.yaml
 ```
 
-ArgoCD sirve HTTPS por defecto. Para exponerlo detrás de Traefik sin doble terminación TLS se habilita el modo inseguro, aceptable en este laboratorio porque todo el tráfico viaja cifrado por Tailscale:
+La versión del chart se fija para que ambos clusters ejecuten la misma. Sin ese argumento, cada instalación recibe la última publicada ese día y los entornos divergen sin que nadie lo haya decidido.
 
-```bash
-helm upgrade argocd argo/argo-cd -n argocd --reuse-values \
-  --set configs.params."server\.insecure"=true
+ArgoCD sirve HTTPS por defecto. Traefik ya termina TLS por delante, de modo que sin desactivarlo habría doble terminación. La opción se declara en `infra/argocd/argocd-values.yaml`, que no es una Application sino la configuración del chart que instala el propio ArgoCD:
+
+```yaml
+configs:
+  params:
+    server.insecure: true
 ```
+
+Es aceptable en este laboratorio porque el tráfico viaja cifrado por Tailscale hasta el nodo.
+
+El cluster de la VM se instaló antes de existir ese fichero, aplicando la opción con `helm upgrade --reuse-values --set configs.params."server\.insecure"=true`. El resultado en el cluster es equivalente, pero deja el release en su segunda revisión y la configuración vive únicamente dentro del cluster: reinstalarlo exige recordar el comando. Declararla en un fichero versionado elimina esa dependencia de la memoria, y de paso evita escapar el punto de `server.insecure`, que en `--set` se interpreta como un nivel de anidamiento.
 
 ### Acceso
 
@@ -1055,9 +1108,12 @@ Contraseña inicial del usuario `admin`:
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-### Application
+### Applications de la aplicación
 
-La Application está declarada en `infra/argocd/app-python.yaml` y vigila el directorio `python-app/` de la rama `develop`:
+Cada release tiene su propia Application. Ambas comparten chart y se diferencian en el nombre y en los `valueFiles`:
+
+* `python-api` en `infra/argocd/clusters/<cluster>/app-api.yaml`, con `values.yaml` y `values-api.yaml`.
+* `python-web` en `infra/argocd/clusters/<cluster>/app-web.yaml`, con `values.yaml` y `values-web.yaml`.
 
 ```yaml
 spec:
@@ -1076,6 +1132,8 @@ spec:
       prune: true
       selfHeal: true
 ```
+
+Al aplicar una Application sobre un release que ya se había desplegado con Helm a mano, ArgoCD lo adopta en lugar de duplicarlo: compara el manifiesto renderizado desde Git con el estado vivo, sin atender a quién lo creó. Si difieren —por ejemplo porque el tag de imagen del cluster es anterior al que fija Git— reconcilia la diferencia y el Deployment rueda.
 
 * **`selfHeal`** revierte automáticamente cualquier cambio hecho directamente sobre el cluster.
 * **`prune`** elimina recursos que ya no existen en Git. El PVC lleva la anotación `argocd.argoproj.io/sync-options: Prune=false` para que nunca se borre y no se pierdan los datos persistentes.
@@ -1129,7 +1187,6 @@ El orden al aplicarlas en un cluster que ya tenía la Application del backend no
 
 ### Limitaciones actuales
 
-* La Application solo gestiona el backend. El frontend sigue desplegándose con Helm de forma manual.
 * Las Applications se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
 
 ---
@@ -1180,6 +1237,34 @@ En lugar de perseguir el síntoma con un script que actualice en cada arranque l
 
 El motivo por el que ese reenvío tampoco alcanza a Traefik queda recogido en el apartado de troubleshooting: `hostPort` no abre un socket en escucha.
 
+### Propagación de montajes
+
+node-exporter monta la raíz del nodo en `/host/root` con `mountPropagation: HostToContainer`, lo que exige que `/` esté marcada como `shared` o `slave` en el host. En una distribución donde systemd arranca como PID 1 desde el principio, la raíz queda `shared`; en WSL2 el sistema de ficheros se monta antes de que systemd tome el control y permanece `private`, de modo que el contenedor ni siquiera llega a crearse:
+
+```text
+path "/" is mounted on "/" but it is not a shared or slave mount
+```
+
+Se resuelve en el nodo y no en el chart, para que el fichero de valores siga sirviendo igual en ambos clusters. Un override de la unidad de K3s marca la raíz antes de arrancar el servicio:
+
+```bash
+sudo systemctl edit k3s
+```
+
+```ini
+[Service]
+ExecStartPre=-/usr/bin/mount --make-rshared /
+```
+
+El guion inicial hace opcional el comando: si fallara, K3s arrancaría igualmente y el cluster no se pierde por un componente de monitorización. La alternativa —desactivar la propagación en los valores del chart— resolvería el síntoma en este cluster a costa de introducir en un fichero compartido un parche que solo aplica a WSL2.
+
+Verificación:
+
+```bash
+findmnt -o TARGET,PROPAGATION /
+systemctl show k3s -p ExecStartPre
+```
+
 ### Sellado de secretos por cluster
 
 La clave privada de Sealed Secrets se genera en el primer arranque del controlador y **pertenece a ese cluster**. Un SealedSecret preparado para la VM no se descifra en el cluster local aunque el namespace y el nombre coincidan.
@@ -1228,7 +1313,15 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * `helm lint` valida estructura y sintaxis, no semántica: un chart que pasa el lint puede renderizar una imagen sin tag o un recurso con el nombre de otro release. `helm template` sí lo detecta, y `required` traslada el fallo del cluster al render.
 * Mover un recurso fuera del path que vigila una Application no lo desvincula de ella: conserva su anotación de seguimiento y una sincronización con `prune` lo elimina. Desarmar la sincronización automática antes de reestructurar el repositorio evita que la reconciliación ejecute un cambio a medio hacer.
 * Una lista de excepciones definida por rutas concretas se rompe en silencio al mover ficheros: la entrada deja de coincidir sin que nada falle, y el hueco solo se manifiesta cuando vuelve a haber contenido que analizar. Acotarla por patrón resiste mejor la reorganización del repositorio.
+* El estado `Degraded` de una Application puede ser transitorio: aparece mientras un Deployment no tiene todas sus réplicas listas, incluidas las de un despliegue en curso. Conviene comprobar si converge antes de intervenir.
+* Un Deployment de una sola réplica y sin readiness probe queda sin servicio durante un rollout: la estrategia por defecto admite un 25% de indisponibilidad, que sobre una réplica es el 100%, y sin readiness probe el pod nuevo se da por listo antes de aceptar conexiones.
 * `kubectl apply` sobre un recurso existente restaura cada campo declarado en el fichero, incluidos los retirados con `kubectl patch`. Un ajuste manual sobre una Application de ArgoCD —desarmar `syncPolicy.automated`, por ejemplo— dura exactamente hasta el siguiente `apply` de su manifiesto, y conviene planificar el orden con eso en mente.
+* Un chart sin `values.schema.json` acepta cualquier clave del fichero de valores y descarta en silencio las que no reconoce: una clave anidada un nivel de más renderiza sin error y deja el recurso sin ese ajuste. El render se comprueba leyendo la salida, no el código de retorno.
+* La raíz de un sistema WSL2 permanece montada como `private`, por lo que los contenedores que piden propagación de montajes no llegan a crearse. Un nodo que se comporta como Linux en todo lo demás puede diferir justo en los detalles que validan el kubelet y el runtime.
+* `systemctl edit` descarta cuanto se escriba por debajo de su marca de corte y, si el resultado queda vacío, cancela la edición sin crear el fichero ni devolver error. El override solo se da por bueno cuando aparece en `systemctl cat` o en `systemctl show -p ExecStartPre`.
+* Un override recién escrito no actúa sobre un servicio que ya está en marcha: sus directivas de arranque no se aplican hasta que la unidad vuelve a iniciarse. Comprobarlo exige reiniciar el servicio o esperar al siguiente arranque.
+* Tras reescribir un commit ya publicado, el `git pull` que sugiere el push rechazado no resuelve nada: fusiona la versión antigua con la nueva y devuelve a la historia el commit que se quería sustituir. La operación correcta es `git push --force-with-lease`, que sobrescribe solo si el remoto sigue donde se esperaba.
+* Grafana bloquea temporalmente al usuario tras varios intentos fallidos y responde entonces con el mismo mensaje que ante una contraseña incorrecta. Su registro distingue lo que la interfaz no: `identity.not-found` cuando el usuario no existe, `invalid password` cuando no coincide la contraseña.
 
 ---
 

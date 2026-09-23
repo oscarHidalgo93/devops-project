@@ -1,0 +1,10 @@
+# Configuración del chart argo/argo-cd (no es una Application de ArgoCD).
+# Se consume al instalar:
+#   helm install argocd argo/argo-cd -n argocd --version 10.3.0 -f infra/argocd/argocd-values.yaml
+configs:
+  params:
+    # ArgoCD sirve HTTPS por defecto. Traefik ya termina TLS por delante, así que
+    # sin esto habría doble terminación y el acceso por Ingress daría un bucle de
+    # redirecciones. Aceptable en este laboratorio porque el tráfico viaja cifrado
+    # por Tailscale hasta el nodo.
+    server.insecure: true
