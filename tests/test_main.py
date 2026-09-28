@@ -31,3 +31,36 @@ def test_counter_endpoint_increments(monkeypatch, tmp_path):
     assert second_data["counter"] == 2
     assert second_data["file"] == str(counter_file)
     assert counter_file.read_text() == "2"
+
+
+def test_healthz_returns_ok():
+    client = app.test_client()
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+
+
+def test_readyz_ready_when_data_dir_is_writable(monkeypatch, tmp_path):
+    monkeypatch.setenv("COUNTER_FILE", str(tmp_path / "counter.txt"))
+
+    client = app.test_client()
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ready"
+
+
+def test_readyz_not_ready_when_data_dir_is_missing(monkeypatch, tmp_path):
+    # Un directorio inexistente falla en cualquier entorno, incluso ejecutando
+    # como root, que ignoraría la falta de permisos de escritura.
+    monkeypatch.setenv("COUNTER_FILE", str(tmp_path / "no-existe" / "counter.txt"))
+
+    client = app.test_client()
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "not ready"
