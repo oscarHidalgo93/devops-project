@@ -11,7 +11,7 @@ service:
   
 containerPort: 8080
 
-persistance:
+persistence:
   enabled: true
   size: 1Gi
   mountPath: /data

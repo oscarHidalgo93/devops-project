@@ -26,7 +26,7 @@ extraVolumeMounts:
     mountPath: /tmp
   
 service:
-  type: NodePort
+  type: ClusterIP
   port: 80
   #nodePort: 30007
 
@@ -40,7 +40,7 @@ config:
   appName: ""
   environment: ""
 
-persistance:
+persistence:
   enabled: false
   size: 1Gi
   mountPath: /data
