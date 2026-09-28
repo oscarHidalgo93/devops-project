@@ -57,3 +57,14 @@ extraVolumeMounts:
     mountPath: /tmp        
   - name: nginx-logs
     mountPath: /var/log/nginx
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: 8080
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: 8080
+
