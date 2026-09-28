@@ -65,3 +65,17 @@ extraVolumeMounts:
 
 existingSecret: "python-api-python-app-secret"
 
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 2
+
