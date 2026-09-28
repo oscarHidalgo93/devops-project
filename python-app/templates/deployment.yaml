@@ -41,19 +41,19 @@ spec:
             - containerPort: {{ .Values.containerPort }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.persistance.enabled .Values.extraVolumeMounts }}
+          {{- if or .Values.persistence.enabled .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- if .Values.persistance.enabled }}
+            {{- if .Values.persistence.enabled }}
             - name: data
-              mountPath: {{ .Values.persistance.mountPath }}
+              mountPath: {{ .Values.persistence.mountPath }}
           {{- end }}
           {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
-      {{- if or .Values.persistance.enabled .Values.extraVolumes }}          
+      {{- if or .Values.persistence.enabled .Values.extraVolumes }}
       volumes: 
-        {{- if .Values.persistance.enabled }}       
+        {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "python-app.fullname" . }}-pvc

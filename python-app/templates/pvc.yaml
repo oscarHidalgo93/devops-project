@@ -1,4 +1,4 @@
-{{- if .Values.persistance.enabled }}
+{{- if .Values.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -9,8 +9,8 @@ metadata:
     argocd.argoproj.io/sync-options: Prune=false  
 spec:
   accessModes:
-    - {{ .Values.persistance.accessMode }}
+    - {{ .Values.persistence.accessMode }}
   resources:
     requests:
-      storage: {{ .Values.persistance.size }}
+      storage: {{ .Values.persistence.size }}
 {{- end }}
