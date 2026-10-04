@@ -1,5 +1,7 @@
 # DevSecOps Kubernetes Lab 🚀
 
+**Español** | [English](README.en.md)
+
 Laboratorio práctico para construir, desplegar y automatizar una aplicación cloud-native sobre Kubernetes, con enfoque en **DevOps, DevSecOps y Platform Engineering**.
 
 El proyecto simula una cadena de entrega de software moderna a pequeña escala:
@@ -173,11 +175,11 @@ flowchart LR
 ## 6. Estructura del repositorio
 
 ```text
-Python-project/
+devops-project/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
+│       └── ci.yaml
 │
 ├── docs/
 │   └── images/
@@ -240,7 +242,8 @@ Python-project/
 ├── pytest.ini
 ├── .dockerignore
 ├── .gitignore
-└── README.md
+├── README.md
+└── README.en.md
 ```
 
 ---
@@ -256,6 +259,8 @@ Endpoints principales:
 ```text
 GET /
 GET /counter
+GET /healthz
+GET /readyz
 ```
 
 El endpoint `/` devuelve información básica de la aplicación:
@@ -287,6 +292,26 @@ Ejemplo de respuesta:
 
 Este endpoint se utiliza para validar el comportamiento del volumen persistente cuando los pods son recreados.
 
+**Endpoints de salud**
+
+`/healthz` y `/readyz` existen para las probes de Kubernetes y responden a preguntas distintas:
+
+* `/healthz` (liveness) confirma únicamente que el proceso responde. Si falla, Kubernetes reinicia el contenedor.
+* `/readyz` (readiness) comprueba que el directorio de datos existe y admite escritura, que es lo que necesita `/counter`. Si falla, devuelve `503` y Kubernetes deja de enviar tráfico al pod sin reiniciarlo.
+
+La liveness no comprueba dependencias externas de forma deliberada. Si lo hiciera, la caída de una dependencia reiniciaría todas las réplicas a la vez sin resolver nada; esas comprobaciones pertenecen a la readiness, que retira el pod del tráfico y lo devuelve cuando la dependencia regresa.
+
+Ambos endpoints se excluyen de las métricas con `@metrics.do_not_track()`. El kubelet los consulta cada pocos segundos, y contarlos llenaría las gráficas de tráfico con peticiones del propio cluster.
+
+**Servidor de aplicación**
+
+La API se sirve con Gunicorn y no con el servidor de desarrollo de Flask. Un proceso maestro vigila a sus workers, sustituye al que termine y, al recibir `SIGTERM`, completa las peticiones en curso antes de salir.
+
+Se configura con un worker y cuatro hilos. En Kubernetes la capacidad se amplía con réplicas y el HPA, no con workers dentro del pod, y hay dos motivos concretos para no aumentarlos:
+
+* La fórmula habitual `(2 × núcleos) + 1` cuenta los núcleos del nodo, no el límite de CPU del contenedor, y en un nodo grande lanzaría muchos más procesos de los que caben en 500m.
+* Cada worker es un proceso con sus propios contadores de Prometheus. Con varios, cada lectura de `/metrics` devolvería los de uno distinto, salvo configurando el modo multiproceso del cliente.
+
 ---
 
 ### Frontend
@@ -312,6 +337,16 @@ Construcción de imagen backend (uso local/desarrollo):
 docker build -t python-k8s-app:latest .
 ```
 
+El proceso principal del contenedor es Gunicorn:
+
+```dockerfile
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--access-logfile", "-", "--no-control-socket", "main:app"]
+```
+
+* La forma de lista (*exec form*) hace de Gunicorn el proceso 1 del contenedor. Con la forma de texto, el proceso 1 sería una shell que no reenvía `SIGTERM`, y Kubernetes acabaría matando el contenedor con `SIGKILL` al agotar el periodo de gracia, cortando las peticiones en curso.
+* `--access-logfile -` envía el registro de accesos a la salida estándar, de donde lo recoge Kubernetes.
+* `--no-control-socket` desactiva la interfaz de control que Gunicorn crea por defecto en `$HOME/.gunicorn/`. El contenedor se ejecuta sin directorio personal y con el sistema de ficheros raíz en solo lectura, y la interfaz no se utiliza.
+
 ### Frontend
 
 Construcción de imagen frontend (uso local/desarrollo):
@@ -320,6 +355,16 @@ Construcción de imagen frontend (uso local/desarrollo):
 cd frontend
 docker build -t frontend-app:latest .
 ```
+
+La imagen parte de `nginxinc/nginx-unprivileged:alpine` y actualiza sus paquetes durante la build:
+
+```dockerfile
+USER root
+RUN apk upgrade --no-cache
+USER 101
+```
+
+Así se incorporan los parches publicados por Alpine antes de que se reconstruya la imagen base. Esa imagen se ejecuta sin privilegios, por lo que la actualización exige cambiar temporalmente a root y volver después al usuario `101`; omitir la última línea dejaría la imagen ejecutándose como root.
 
 ### Publicación en GHCR (GitHub Container Registry)
 
@@ -338,7 +383,7 @@ Con esto, el flujo manual de construir la imagen en la VM, exportarla con `docke
 
 ## 9. Kubernetes
 
-El entorno Kubernetes se ejecuta sobre K3s dentro de una VM Ubuntu.
+El entorno Kubernetes se ejecuta sobre K3s, en una VM Ubuntu y en un cluster local sobre WSL2 (sección 24).
 
 Namespace principal:
 
@@ -372,48 +417,90 @@ values-api.yaml   → configuración específica del backend
 values-web.yaml   → configuración específica del frontend
 ```
 
-El tag de la imagen (`image.tag`) **no se define en los ficheros de values** — se pasa de forma explícita en el momento del despliegue con `--set`, usando el SHA corto del commit que se quiere desplegar (el mismo que generó y publicó el CI en GHCR):
+El tag de la imagen (`image.tag`) se fija en `values-api.yaml` y `values-web.yaml`, y lo actualiza la CI en cada integración en `develop` (sección 23). La plantilla lo declara obligatorio con `required`, de modo que un despliegue sin tag falla en el render y no en el cluster.
 
-```bash
-git rev-parse --short HEAD
-```
+### Despliegue manual
 
-### Despliegue backend
-
-```bash
-cd python-app
-
-helm upgrade --install python-api . \
-  -n dev \
-  -f values.yaml \
-  -f values-api.yaml \
-  --set image.tag=<sha-corto> \
-  --set secret.apiToken="<token>"
-```
-
-### Despliegue frontend
+El despliegue habitual lo realiza ArgoCD. Sin él, cada release se instala con su combinación de ficheros:
 
 ```bash
 cd python-app
 
-helm upgrade --install python-web . \
-  -n dev \
-  -f values.yaml \
-  -f values-web.yaml \
-  --set image.tag=<sha-corto>
+helm upgrade --install python-api . -n dev -f values.yaml -f values-api.yaml
+helm upgrade --install python-web . -n dev -f values.yaml -f values-web.yaml
 ```
 
-### Validación de templates
+### El fichero values.yaml como contrato
+
+`values.yaml` declara todas las claves que admite el chart, aunque estén vacías, porque es donde se consulta qué se puede configurar. Sus valores por defecto siguen un criterio explícito:
+
+* Por defecto va lo que es seguro para cualquier release y no altera su comportamiento habitual, como la estrategia de despliegue.
+* Lo que depende del comportamiento de cada aplicación se activa en su propio fichero de values, como las probes o el objetivo de memoria del HPA.
+
+### Probes de salud
+
+Cada release declara sus probes en su fichero de values, y la plantilla las incluye solo si existen:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  periodSeconds: 5
+  failureThreshold: 2
+```
+
+La readiness es más frecuente y más sensible que la liveness porque retirar un pod del tráfico es barato y reversible, mientras que reiniciarlo no lo es. La liveness tolera unos treinta segundos de fallos antes de actuar. El frontend usa ambas probes sobre `/`, suficiente para Nginx sirviendo contenido estático.
+
+### Estrategia de despliegue
+
+Todos los releases heredan una actualización progresiva que nunca reduce la capacidad disponible:
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+```
+
+Kubernetes crea primero un pod adicional, espera a que supere la readiness y solo entonces retira uno antiguo. El coste es un pod más durante unos segundos. El frontend se despliega con dos réplicas, ya que con una sola cualquier incidencia del pod lo deja sin servicio, por buena que sea la estrategia.
+
+Se comprueba lanzando peticiones continuas en una terminal:
 
 ```bash
+timeout 90 bash -c 'while true; do curl -s -o /dev/null -w "%{http_code}\n" --max-time 2 -H "Host: web.local" http://127.0.0.1/; sleep 0.2; done' | sort | uniq -c
+```
+
+Y forzando un despliegue en otra:
+
+```bash
+kubectl rollout restart deployment/python-web-python-app -n dev
+```
+
+Todas las respuestas deben ser `200`. ArgoCD no revierte el reinicio, porque la anotación que añade `rollout restart` no está declarada en Git.
+
+La estrategia tiene límites: necesita espacio en el nodo para el pod adicional, y no sirve para aplicaciones que no toleran dos versiones simultáneas, que requieren `type: Recreate`. Por eso es un valor por defecto que cada release puede sobrescribir.
+
+### Validación
+
+```bash
+helm lint .
 helm template test-api . -f values.yaml -f values-api.yaml
 helm template test-web . -f values.yaml -f values-web.yaml
 ```
 
-### Validación del chart
+`helm template` comprueba que las plantillas generan YAML, no que el resultado sea un objeto válido para Kubernetes. Esa validación la realiza el servidor de la API sin persistir nada:
 
 ```bash
-helm lint .
+helm template python-api . -f values.yaml -f values-api.yaml | kubectl apply --dry-run=server -n dev -f -
 ```
 
 ---
@@ -555,12 +642,12 @@ kubectl create secret generic python-api-python-app-secret \
   --dry-run=client -o yaml > /tmp/secret-claro.yaml
 
 kubeseal --format yaml --controller-namespace kube-system \
-  < /tmp/secret-claro.yaml > python-app/templates/sealedsecret.yaml
+  < /tmp/secret-claro.yaml > infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml
 
 rm /tmp/secret-claro.yaml
 ```
 
-El resultado se almacena en `python-app/templates/sealedsecret.yaml` y ArgoCD lo despliega como cualquier otro recurso del chart.
+El resultado se almacena en `infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml` y lo despliega la Application `secrets-<cluster>` de ese cluster (sección 23). El sellado es propio de cada cluster (sección 24).
 
 Validación:
 
@@ -602,6 +689,10 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
 ```
+
+Cada métrica se incluye en el HPA solo si el release declara su objetivo. La de memoria no tiene valor por defecto de forma deliberada: el HPA asume que la métrica por pod baja al añadir réplicas, lo que se cumple con la CPU pero no con la memoria de un runtime que no devuelve lo que libera. Como el HPA se queda con la métrica que pide más réplicas, una memoria que no baja impediría reducirlas.
+
+El porcentaje se calcula sobre los `requests`. Con Gunicorn, cada pod de la API consume unos 45Mi en reposo, que sobre la petición anterior de 64Mi equivalían a un 70%, a diez puntos del objetivo. La petición se elevó a 128Mi para que el consumo en reposo no provoque escalado sin carga.
 
 Comprobación:
 
@@ -659,6 +750,8 @@ curl http://api.local/counter
 El contador continúa después de recrear los pods, demostrando persistencia real.
 
 > Nota: el contador en fichero es una demo técnica para validar PVC. En un entorno productivo, el estado compartido debería externalizarse en una base de datos, Redis u otro servicio especializado.
+
+El diseño tiene además dos limitaciones conocidas. El volumen es `ReadWriteOnce`, por lo que con varios nodos solo podrían montarlo los pods del nodo al que está asignado. Y el incremento se hace leyendo, sumando y escribiendo desde la aplicación, una secuencia no atómica en la que dos réplicas simultáneas pierden incrementos. Ambas se resolverán llevando el contador a Redis, cuyo `INCR` es atómico en el servidor.
 
 ---
 
@@ -742,7 +835,7 @@ deactivate
 El proyecto incluye una pipeline de CI en:
 
 ```text
-.github/workflows/ci.yml
+.github/workflows/ci.yaml
 ```
 
 La pipeline se ejecuta en:
@@ -773,11 +866,11 @@ flowchart TD
     BuildBackend --> BuildFrontend[Build frontend Docker image]
     BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
     TrivyImages --> PushGHCR[Push imágenes a GHCR]
-    PushGHCR --> UpdateTag[Commit del nuevo tag en values-api.yaml]
+    PushGHCR --> UpdateTag[Commit del nuevo tag en values-api.yaml y values-web.yaml]
     UpdateTag --> ArgoCD[ArgoCD detecta y despliega]
 ```
 
-> Los pasos de push a GHCR y de actualización del tag solo se ejecutan en eventos `push` sobre `develop` o `main`, nunca en Pull Requests.
+> El push a GHCR se ejecuta en eventos `push` sobre `develop` y `main`, y la actualización del tag solo sobre `develop`. Ninguno de los dos se ejecuta en Pull Requests.
 
 ### Validaciones actuales
 
@@ -798,7 +891,7 @@ La CI valida:
 
 Esto permite detectar errores antes de integrar cambios en las ramas principales del proyecto.
 
-Además, en push sobre `develop` la pipeline publica las imágenes en GHCR y actualiza el tag en `values-api.yaml`, cerrando el ciclo hacia el despliegue automático mediante ArgoCD.
+Además, en push sobre `develop` la pipeline publica las imágenes en GHCR y actualiza el tag en `values-api.yaml` y `values-web.yaml`, cerrando el ciclo hacia el despliegue automático mediante ArgoCD.
 
 ---
 
@@ -1153,7 +1246,7 @@ spec:
 
 ### Actualización automática del tag de imagen
 
-Tras publicar la imagen en GHCR, el pipeline actualiza `image.tag` en `values-api.yaml` y lo commitea. ArgoCD detecta ese commit y despliega sin intervención manual:
+Tras publicar la imagen en GHCR, el pipeline actualiza `image.tag` en `values-api.yaml` y `values-web.yaml` y commitea el cambio. ArgoCD detecta ese commit y despliega sin intervención manual:
 
 ```text
 push a develop → CI construye y publica imagen → CI commitea el nuevo tag
@@ -1322,6 +1415,14 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Un override recién escrito no actúa sobre un servicio que ya está en marcha: sus directivas de arranque no se aplican hasta que la unidad vuelve a iniciarse. Comprobarlo exige reiniciar el servicio o esperar al siguiente arranque.
 * Tras reescribir un commit ya publicado, el `git pull` que sugiere el push rechazado no resuelve nada: fusiona la versión antigua con la nueva y devuelve a la historia el commit que se quería sustituir. La operación correcta es `git push --force-with-lease`, que sobrescribe solo si el remoto sigue donde se esperaba.
 * Grafana bloquea temporalmente al usuario tras varios intentos fallidos y responde entonces con el mismo mensaje que ante una contraseña incorrecta. Su registro distingue lo que la interfaz no: `identity.not-found` cuando el usuario no existe, `invalid password` cuando no coincide la contraseña.
+* `helm template` acepta objetos que Kubernetes rechaza: una probe con `httpGet: /` en lugar de un objeto con `path` y `port` renderiza sin error. `kubectl apply --dry-run=server` la detecta antes de que llegue a Git, y ArgoCD no quede en `SyncFailed`.
+* El guion de `{{-` elimina todo el espacio a su izquierda, no solo los saltos de línea. Usado tras `name:`, se lleva también el espacio que separa la clave del valor y el resultado deja de ser YAML válido.
+* Sin readiness probe, un rollout sustituye todos los pods en un segundo, porque un contenedor se da por listo en cuanto arranca. Con ella, cada pod antiguo solo se retira cuando el nuevo responde, y una imagen que no arranca deja el rollout detenido con las réplicas sanas atendiendo.
+* Cuando fallan a la vez las probes de todos los pods de un nodo, el problema es el nodo y no las aplicaciones. Consultar los eventos de todo el cluster en una ventana de tiempo lo distingue en un solo comando.
+* El orden entre la sincronización de ArgoCD y el commit de tag de la CI depende de cuál llegue antes. Por eso un cambio que habilita algo, como los endpoints de salud, se despliega antes y por separado del que lo utiliza, como las probes.
+* La CI genera imágenes y un tag nuevo en cada integración en `develop`, aunque el cambio sea solo de documentación o del chart. El resultado es un despliegue sin ningún cambio de código detrás.
+* Una dependencia sin versión fija puede introducir comportamientos que nadie decidió. Gunicorn 26 intentaba crear su socket de control en `$HOME`, que en un contenedor sin directorio personal y con el sistema de ficheros en solo lectura no admite escritura.
+* Una Pull Request desde una rama basada en `develop` hacia `main` incorpora todo `develop`, no solo sus propios commits. GitHub propone la rama por defecto del repositorio como base, y ese descuido equivale a una promoción no planificada.
 
 ---
 
@@ -1342,6 +1443,8 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 * Escaneo automático de secretos (Gitleaks) e imágenes/config (Trivy) en cada PR.
 * Contenedores con `runAsNonRoot`, `readOnlyRootFilesystem` y capabilities mínimas por defecto en el chart.
 * Eliminación de herramientas de build (`pip`, `setuptools`, `wheel`) de la imagen en runtime.
+* Actualización de los paquetes de la imagen base del frontend durante la build, devolviendo después el contenedor a un usuario sin privilegios.
+* Desactivación de la interfaz de control de Gunicorn, que no se utiliza: no se mantienen vías de gestión innecesarias.
 
 ---
 
@@ -1370,6 +1473,9 @@ Prometheus/Grafana         ✅
 ArgoCD GitOps              ✅
 Sealed Secrets             ✅
 K3s local sobre WSL2       ✅
+Probes de salud            ✅
+Rollouts sin cortes        ✅
+Gunicorn                   ✅
 ```
 
 ---
@@ -1411,6 +1517,18 @@ Próximas mejoras previstas:
 * Sealed Secrets para cifrar valores sensibles y versionarlos en Git.
 * Eliminación del `--set secret.apiToken` en el despliegue.
 
+### Robustez del despliegue ✅ (completado)
+
+* Endpoints de liveness y readiness, y probes en el chart.
+* Actualizaciones progresivas sin pérdida de capacidad.
+* Gunicorn como servidor de la API.
+* Corrección de errores latentes del chart: métricas del HPA condicionales, claves mal escritas y tipo de Service por defecto.
+
+### Estado fuera del pod
+
+* Redis como StatefulSet, con imagen oficial y plantillas propias, en sustitución del contador en fichero.
+* Conexión a Redis comprobada en la readiness y nunca en la liveness.
+
 ### Supply Chain Security
 
 * SBOM.
@@ -1426,9 +1544,7 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 **Cerrar el modelo GitOps**
 
 * Patrón *app-of-apps*: una Application raíz que gestione `infra/`, de forma que los manifiestos de ArgoCD, Prometheus y Sealed Secrets dejen de aplicarse con `kubectl apply` manual.
-* Application para el frontend, que aún se despliega con Helm de forma manual.
 * Evaluar `ServerSideApply` para que `selfHeal` detecte campos añadidos fuera de Git, que actualmente pasan desapercibidos.
-* Sincronizar ArgoCD desde `main` y separar entornos (`develop` → `dev`, `main` → `prod`), acercando el laboratorio a un flujo de promoción real.
 
 **Policy as code**
 
@@ -1446,7 +1562,10 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 * Smoke test en el CI que ejecute el contenedor construido, ya que `docker build` valida la sintaxis pero nunca comprueba que la imagen arranque.
 * Reconstrucción periódica programada de las imágenes, para incorporar parches de la base sin depender de que haya cambios en el código.
 * Ampliar los tests a casos límite: variables de entorno no definidas y fichero de contador corrupto.
-* Migrar Flask del servidor de desarrollo a gunicorn.
+* Fijar las versiones de las dependencias de Python: hoy cada build instala la última publicada.
+* Construir y publicar imágenes solo cuando cambie su código, para que integrar documentación o cambios del chart no genere un despliegue.
+* Comprobar en la CI que las Pull Requests hacia `main` proceden de `develop`, y exigirlo en las reglas de la rama.
+* PodDisruptionBudget para limitar las interrupciones voluntarias simultáneas.
 * Fijar las imágenes base por digest, requisito previo para SBOM y firma.
 
 **Evolución de la gestión de secretos**
