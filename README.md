@@ -1,5 +1,7 @@
 # DevSecOps Kubernetes Lab 🚀
 
+**Español** | [English](README.en.md)
+
 Laboratorio práctico para construir, desplegar y automatizar una aplicación cloud-native sobre Kubernetes, con enfoque en **DevOps, DevSecOps y Platform Engineering**.
 
 El proyecto simula una cadena de entrega de software moderna a pequeña escala:
@@ -173,11 +175,11 @@ flowchart LR
 ## 6. Estructura del repositorio
 
 ```text
-Python-project/
+devops-project/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
+│       └── ci.yaml
 │
 ├── docs/
 │   └── images/
@@ -240,7 +242,8 @@ Python-project/
 ├── pytest.ini
 ├── .dockerignore
 ├── .gitignore
-└── README.md
+├── README.md
+└── README.en.md
 ```
 
 ---
@@ -639,12 +642,12 @@ kubectl create secret generic python-api-python-app-secret \
   --dry-run=client -o yaml > /tmp/secret-claro.yaml
 
 kubeseal --format yaml --controller-namespace kube-system \
-  < /tmp/secret-claro.yaml > python-app/templates/sealedsecret.yaml
+  < /tmp/secret-claro.yaml > infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml
 
 rm /tmp/secret-claro.yaml
 ```
 
-El resultado se almacena en `python-app/templates/sealedsecret.yaml` y ArgoCD lo despliega como cualquier otro recurso del chart.
+El resultado se almacena en `infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml` y lo despliega la Application `secrets-<cluster>` de ese cluster (sección 23). El sellado es propio de cada cluster (sección 24).
 
 Validación:
 
@@ -832,7 +835,7 @@ deactivate
 El proyecto incluye una pipeline de CI en:
 
 ```text
-.github/workflows/ci.yml
+.github/workflows/ci.yaml
 ```
 
 La pipeline se ejecuta en:
@@ -863,11 +866,11 @@ flowchart TD
     BuildBackend --> BuildFrontend[Build frontend Docker image]
     BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
     TrivyImages --> PushGHCR[Push imágenes a GHCR]
-    PushGHCR --> UpdateTag[Commit del nuevo tag en values-api.yaml]
+    PushGHCR --> UpdateTag[Commit del nuevo tag en values-api.yaml y values-web.yaml]
     UpdateTag --> ArgoCD[ArgoCD detecta y despliega]
 ```
 
-> Los pasos de push a GHCR y de actualización del tag solo se ejecutan en eventos `push` sobre `develop` o `main`, nunca en Pull Requests.
+> El push a GHCR se ejecuta en eventos `push` sobre `develop` y `main`, y la actualización del tag solo sobre `develop`. Ninguno de los dos se ejecuta en Pull Requests.
 
 ### Validaciones actuales
 
@@ -888,7 +891,7 @@ La CI valida:
 
 Esto permite detectar errores antes de integrar cambios en las ramas principales del proyecto.
 
-Además, en push sobre `develop` la pipeline publica las imágenes en GHCR y actualiza el tag en `values-api.yaml`, cerrando el ciclo hacia el despliegue automático mediante ArgoCD.
+Además, en push sobre `develop` la pipeline publica las imágenes en GHCR y actualiza el tag en `values-api.yaml` y `values-web.yaml`, cerrando el ciclo hacia el despliegue automático mediante ArgoCD.
 
 ---
 
@@ -1243,7 +1246,7 @@ spec:
 
 ### Actualización automática del tag de imagen
 
-Tras publicar la imagen en GHCR, el pipeline actualiza `image.tag` en `values-api.yaml` y lo commitea. ArgoCD detecta ese commit y despliega sin intervención manual:
+Tras publicar la imagen en GHCR, el pipeline actualiza `image.tag` en `values-api.yaml` y `values-web.yaml` y commitea el cambio. ArgoCD detecta ese commit y despliega sin intervención manual:
 
 ```text
 push a develop → CI construye y publica imagen → CI commitea el nuevo tag
