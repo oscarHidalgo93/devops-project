@@ -20,4 +20,5 @@ COPY main.py .
 
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--access-logfile", "-", "main:app"]
+

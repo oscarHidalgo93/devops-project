@@ -36,7 +36,7 @@ spec:
           {{- end }}
           envFrom:
             - configMapRef:
-                name: {{include "python-app.fullname" . }}-config
+                name: {{ include "python-app.fullname" . }}-config
             {{- if .Values.existingSecret }}
             - secretRef:
                 name: {{ .Values.existingSecret }}
