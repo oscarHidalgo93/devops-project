@@ -1,5 +1,7 @@
 # DevSecOps Kubernetes Lab 🚀
 
+**Español** | [English](README.en.md)
+
 Laboratorio práctico para construir, desplegar y automatizar una aplicación cloud-native sobre Kubernetes, con enfoque en **DevOps, DevSecOps y Platform Engineering**.
 
 El proyecto simula una cadena de entrega de software moderna a pequeña escala:
@@ -240,7 +242,8 @@ Python-project/
 ├── pytest.ini
 ├── .dockerignore
 ├── .gitignore
-└── README.md
+├── README.md
+└── README.en.md
 ```
 
 ---
