@@ -175,11 +175,11 @@ flowchart LR
 ## 6. Repository structure
 
 ```text
-Python-project/
+devops-project/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
+│       └── ci.yaml
 │
 ├── docs/
 │   └── images/
@@ -642,12 +642,12 @@ kubectl create secret generic python-api-python-app-secret \
   --dry-run=client -o yaml > /tmp/secret-plain.yaml
 
 kubeseal --format yaml --controller-namespace kube-system \
-  < /tmp/secret-plain.yaml > python-app/templates/sealedsecret.yaml
+  < /tmp/secret-plain.yaml > infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml
 
 rm /tmp/secret-plain.yaml
 ```
 
-The result is stored in `python-app/templates/sealedsecret.yaml` and ArgoCD deploys it like any other resource in the chart.
+The result is stored in `infra/sealed-secrets/clusters/<CLUSTER>/api-secret.yaml` and is deployed by that cluster's `secrets-<cluster>` Application (section 23). The sealing is specific to each cluster (section 24).
 
 Validation:
 
@@ -835,7 +835,7 @@ deactivate
 The project includes a CI pipeline in:
 
 ```text
-.github/workflows/ci.yml
+.github/workflows/ci.yaml
 ```
 
 The pipeline runs on:
@@ -866,11 +866,11 @@ flowchart TD
     BuildBackend --> BuildFrontend[Build frontend Docker image]
     BuildFrontend --> TrivyImages[Trivy image scan backend/frontend]
     TrivyImages --> PushGHCR[Push images to GHCR]
-    PushGHCR --> UpdateTag[Commit the new tag in values-api.yaml]
+    PushGHCR --> UpdateTag[Commit the new tag in values-api.yaml and values-web.yaml]
     UpdateTag --> ArgoCD[ArgoCD detects and deploys]
 ```
 
-> The GHCR push and tag update steps only run on `push` events to `develop` or `main`, never on Pull Requests.
+> The GHCR push runs on `push` events to `develop` and `main`, and the tag update only on `develop`. Neither runs on Pull Requests.
 
 ### Current checks
 
@@ -891,7 +891,7 @@ CI validates:
 
 This catches errors before changes are integrated into the project's main branches.
 
-In addition, on push to `develop` the pipeline publishes the images to GHCR and updates the tag in `values-api.yaml`, closing the loop towards automatic deployment through ArgoCD.
+In addition, on push to `develop` the pipeline publishes the images to GHCR and updates the tag in `values-api.yaml` and `values-web.yaml`, closing the loop towards automatic deployment through ArgoCD.
 
 ---
 
@@ -1246,7 +1246,7 @@ spec:
 
 ### Automatic image tag update
 
-After publishing the image to GHCR, the pipeline updates `image.tag` in `values-api.yaml` and commits it. ArgoCD detects that commit and deploys without manual intervention:
+After publishing the image to GHCR, the pipeline updates `image.tag` in `values-api.yaml` and `values-web.yaml` and commits the change. ArgoCD detects that commit and deploys without manual intervention:
 
 ```text
 push to develop → CI builds and publishes the image → CI commits the new tag
