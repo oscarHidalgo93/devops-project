@@ -51,5 +51,30 @@ def counter():
     }
 
 
+# Liveness: solo confirma que el proceso responde. No comprueba dependencias:
+# si fallara por una de ellas, Kubernetes reiniciaría pods que no pueden
+# arreglarla y provocaría reinicios en cascada.
+@app.route("/healthz")
+@metrics.do_not_track()
+def healthz():
+    return {"status": "ok"}
+
+
+# Readiness: comprueba lo que el pod necesita para atender tráfico. Si falla,
+# Kubernetes deja de enviarle peticiones, pero no lo reinicia.
+@app.route("/readyz")
+@metrics.do_not_track()
+def readyz():
+    counter_dir = os.path.dirname(get_counter_file())
+
+    if not os.access(counter_dir, os.W_OK):
+        return {
+            "status": "not ready",
+            "reason": f"{counter_dir} no existe o no admite escritura",
+        }, 503
+
+    return {"status": "ready"}
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)

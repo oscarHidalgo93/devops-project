@@ -9,6 +9,10 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "python-app.selectorLabels" . | nindent 6 }}
@@ -32,28 +36,36 @@ spec:
           {{- end }}
           envFrom:
             - configMapRef:
-                name: {{include "python-app.fullname" . }}-config
+                name: {{ include "python-app.fullname" . }}-config
             {{- if .Values.existingSecret }}
             - secretRef:
                 name: {{ .Values.existingSecret }}
             {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.containerPort }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if or .Values.persistance.enabled .Values.extraVolumeMounts }}
+          {{- if or .Values.persistence.enabled .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- if .Values.persistance.enabled }}
+            {{- if .Values.persistence.enabled }}
             - name: data
-              mountPath: {{ .Values.persistance.mountPath }}
+              mountPath: {{ .Values.persistence.mountPath }}
           {{- end }}
           {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
-      {{- if or .Values.persistance.enabled .Values.extraVolumes }}          
+      {{- if or .Values.persistence.enabled .Values.extraVolumes }}
       volumes: 
-        {{- if .Values.persistance.enabled }}       
+        {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "python-app.fullname" . }}-pvc
