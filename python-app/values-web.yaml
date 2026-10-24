@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/oscarhidalgo93/frontend-app
-  tag: "787e844"
+  tag: "2dd7e0c"
   pullPolicy: IfNotPresent
 
 service:
