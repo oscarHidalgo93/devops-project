@@ -27,7 +27,13 @@ resources:
 
 ingress:
   enabled: true
-  host: api.local  
+  hosts:
+    - host: api.local
+      paths:
+        - /
+    - host: web.local
+      paths:
+        - /api
 
 config:
   appName: python-api
