@@ -57,12 +57,12 @@ El escalado del backend lo gobierna un HPA con objetivos de CPU y memoria, repre
 
 ```mermaid
 flowchart TD
-    User[Usuario / Navegador] --> Hosts[Resolución local: api.local / web.local]
+    User[Usuario / Navegador] --> Hosts[Resolución local: web.local]
     Hosts --> Tailscale[Tailscale]
     Tailscale --> Traefik[Traefik Ingress Controller]
 
-    Traefik --> WebIngress[Ingress web.local]
-    Traefik --> ApiIngress[Ingress api.local]
+    Traefik --> WebIngress["Ingress web.local/"]
+    Traefik --> ApiIngress["Ingress web.local/api"]
 
     WebIngress --> WebService[Service Frontend]
     ApiIngress --> ApiService[Service Backend API]
@@ -94,7 +94,7 @@ flowchart TD
 flowchart LR
     Browser[Navegador] --> Web["Frontend web.local"]
     Web --> Nginx["Nginx"]
-    Nginx --> ApiCall["fetch http://api.local"]
+    Nginx --> ApiCall["fetch /api/ (mismo origen)"]
     ApiCall --> Flask["Backend Flask API"]
     Flask --> Env["Variables de entorno"]
     Env --> CM["ConfigMap"]
@@ -111,7 +111,6 @@ flowchart LR
 
 * Python
 * Flask
-* Flask-CORS
 * prometheus-flask-exporter
 * HTML
 * JavaScript
@@ -254,16 +253,22 @@ devops-project/
 
 La API está desarrollada con Flask.
 
-Endpoints principales:
+Endpoints públicos, bajo el prefijo `/api`:
 
 ```text
-GET /
-GET /counter
-GET /healthz
-GET /readyz
+GET /api/
+GET /api/counter
 ```
 
-El endpoint `/` devuelve información básica de la aplicación:
+Endpoints internos, en la raíz y no accesibles a través del Ingress:
+
+```text
+GET /healthz
+GET /readyz
+GET /metrics
+```
+
+El endpoint `/api/` devuelve información básica de la aplicación:
 
 ```json
 {
@@ -274,7 +279,7 @@ El endpoint `/` devuelve información básica de la aplicación:
 }
 ```
 
-El endpoint `/counter` incrementa un contador persistente almacenado en:
+El endpoint `/api/counter` incrementa un contador persistente almacenado en:
 
 ```text
 /data/counter.txt
@@ -297,7 +302,7 @@ Este endpoint se utiliza para validar el comportamiento del volumen persistente 
 `/healthz` y `/readyz` existen para las probes de Kubernetes y responden a preguntas distintas:
 
 * `/healthz` (liveness) confirma únicamente que el proceso responde. Si falla, Kubernetes reinicia el contenedor.
-* `/readyz` (readiness) comprueba que el directorio de datos existe y admite escritura, que es lo que necesita `/counter`. Si falla, devuelve `503` y Kubernetes deja de enviar tráfico al pod sin reiniciarlo.
+* `/readyz` (readiness) comprueba que el directorio de datos existe y admite escritura, que es lo que necesita `/api/counter`. Si falla, devuelve `503` y Kubernetes deja de enviar tráfico al pod sin reiniciarlo.
 
 La liveness no comprueba dependencias externas de forma deliberada. Si lo hiciera, la caída de una dependencia reiniciaría todas las réplicas a la vez sin resolver nada; esas comprobaciones pertenecen a la readiness, que retira el pod del tráfico y lo devuelve cuando la dependencia regresa.
 
@@ -316,7 +321,7 @@ Se configura con un worker y cuatro hilos. En Kubernetes la capacidad se amplía
 
 ### Frontend
 
-El frontend se sirve con Nginx y consume la API mediante JavaScript.
+El frontend se sirve con Nginx y consume la API mediante JavaScript, con peticiones relativas a `/api/` sobre su mismo dominio.
 
 Responsabilidades:
 
@@ -507,19 +512,36 @@ helm template python-api . -f values.yaml -f values-api.yaml | kubectl apply --d
 
 ## 11. Ingress
 
-K3s incluye Traefik como Ingress Controller por defecto.
+K3s incluye Traefik como Ingress Controller por defecto. La clase se declara en `ingress.className`, de modo que el chart puede usarse con otro controlador sin modificar las plantillas.
 
-Hosts utilizados:
+La aplicación se publica en un único dominio y el reparto se hace por ruta:
 
 ```text
-api.local
-web.local
+web.local/      → frontend (Nginx)
+web.local/api/  → API (Flask)
 ```
+
+Cada release declara sus hosts y rutas en su fichero de values. Son dos objetos Ingress sobre el mismo host, y el controlador encamina cada petición a la ruta más específica:
+
+```yaml
+# values-api.yaml
+ingress:
+  enabled: true
+  hosts:
+    - host: web.local
+      paths:
+        - /api
+```
+
+Publicar la API en el mismo dominio que el frontend tiene tres consecuencias:
+
+* El navegador hace las peticiones desde el mismo origen que la página, por lo que no interviene CORS y la API no necesita habilitarlo.
+* El cliente solo necesita resolver un nombre.
+* El Ingress solo encamina `/api` hacia la API: `/metrics`, `/healthz` y `/readyz` quedan accesibles únicamente desde dentro del cluster, para Prometheus y el kubelet.
 
 Ejemplo de resolución local en el equipo cliente:
 
 ```text
-<TAILSCALE_VM_IP> api.local
 <TAILSCALE_VM_IP> web.local
 ```
 
@@ -530,6 +552,18 @@ C:\Windows\System32\drivers\etc\hosts
 ```
 
 > Se utiliza `<TAILSCALE_VM_IP>` como placeholder para evitar publicar direcciones IP reales del entorno.
+
+### Migración a un único dominio
+
+La API se publicaba antes en su propio dominio, `api.local`. El cambio se hizo en tres pasos para no cortar en ningún momento a quien la consumía, siguiendo el patrón *expand/contract*:
+
+```text
+1. Expand    la API responde en api.local/ y en web.local/api/ a la vez
+2. Migrar    el frontend pasa a llamar a /api/
+3. Contract  se retiran api.local, las rutas en la raíz y CORS
+```
+
+En cada paso conviven lo antiguo y lo nuevo, de modo que deja de importar el orden en que ArgoCD aplique el chart y la CI publique la imagen. En Flask, las rutas de negocio se agrupan en un Blueprint, que durante la transición se montó en la raíz y bajo `/api` a la vez. Un test de contrato comprueba que la raíz ya no las publica.
 
 ---
 
@@ -741,10 +775,10 @@ python-api-python-app-pvc   Bound    1Gi        RWO            local-path
 Prueba de persistencia:
 
 ```bash
-curl http://api.local/counter
-curl http://api.local/counter
+curl http://web.local/api/counter
+curl http://web.local/api/counter
 kubectl delete pod -n dev -l app.kubernetes.io/instance=python-api
-curl http://api.local/counter
+curl http://web.local/api/counter
 ```
 
 El contador continúa después de recrear los pods, demostrando persistencia real.
@@ -767,9 +801,10 @@ tests/test_main.py
 
 Los tests validan:
 
-* El endpoint `/`.
-* El endpoint `/counter`.
-* La lógica de incremento del contador.
+* El endpoint `/api/`.
+* El endpoint `/api/counter` y la lógica de incremento del contador.
+* Los endpoints de salud, incluido el caso en que la readiness devuelve `503`.
+* El contrato de rutas: la raíz ya no publica las rutas de negocio.
 * El uso de una ruta temporal para no depender del PVC real durante los tests.
 
 Ejecución local:
@@ -1104,7 +1139,6 @@ Inicialización en `main.py`:
 from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
-CORS(app)
 metrics = PrometheusMetrics(app, path="/metrics")
 ```
 
@@ -1146,7 +1180,7 @@ Ejemplo de consulta en Grafana o Prometheus:
 rate(flask_http_request_total[5m])
 ```
 
-> Nota: el endpoint `/metrics` queda accesible a través del Ingress de la API. En un entorno productivo conviene servirlo en un puerto separado no expuesto públicamente, o restringir el acceso mediante NetworkPolicy para que solo Prometheus pueda consultarlo, ya que expone información sobre rutas, tráfico y errores de la aplicación.
+> Nota: `/metrics` no se publica por el Ingress, que solo encamina `/api` hacia la API (sección 11). Prometheus lo consulta directamente sobre el Service. Restringir además ese acceso dentro del cluster, para que solo el namespace de monitorización pueda alcanzarlo, corresponde a una NetworkPolicy.
 
 ---
 
@@ -1423,6 +1457,11 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * La CI genera imágenes y un tag nuevo en cada integración en `develop`, aunque el cambio sea solo de documentación o del chart. El resultado es un despliegue sin ningún cambio de código detrás.
 * Una dependencia sin versión fija puede introducir comportamientos que nadie decidió. Gunicorn 26 intentaba crear su socket de control en `$HOME`, que en un contenedor sin directorio personal y con el sistema de ficheros en solo lectura no admite escritura.
 * Una Pull Request desde una rama basada en `develop` hacia `main` incorpora todo `develop`, no solo sus propios commits. GitHub propone la rama por defecto del repositorio como base, y ese descuido equivale a una promoción no planificada.
+* Cambiar la dirección por la que se consume un servicio sin cortes exige que lo antiguo y lo nuevo convivan durante la transición (*expand/contract*). Hacerlo en un solo cambio deja una ventana, entre la sincronización del chart y la llegada de la imagen, en la que los clientes antiguos llaman a una ruta que ya no existe.
+* Las rutas de un Blueprint de Flask se copian a la aplicación al registrarlo: las que se definen después de `register_blueprint` no quedan incluidas, y Flask se niega a arrancar.
+* Al combinar ficheros de values, Helm fusiona los mapas pero sustituye las listas enteras: una lista de hosts en el fichero de un release reemplaza a la del fichero común, no se suma a ella.
+* Dentro de un `range` de Helm, `.` pasa a ser el elemento recorrido; para acceder al contexto del chart hay que usar `$`.
+* La mejor configuración de CORS es no necesitarla: si el frontend y la API comparten origen, el navegador no aplica la política y la API no tiene que admitir orígenes ajenos.
 
 ---
 
@@ -1445,6 +1484,8 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 * Eliminación de herramientas de build (`pip`, `setuptools`, `wheel`) de la imagen en runtime.
 * Actualización de los paquetes de la imagen base del frontend durante la build, devolviendo después el contenedor a un usuario sin privilegios.
 * Desactivación de la interfaz de control de Gunicorn, que no se utiliza: no se mantienen vías de gestión innecesarias.
+* API publicada en el mismo origen que el frontend, sin CORS habilitado.
+* Métricas y endpoints de salud accesibles solo desde dentro del cluster.
 
 ---
 
@@ -1476,6 +1517,7 @@ K3s local sobre WSL2       ✅
 Probes de salud            ✅
 Rollouts sin cortes        ✅
 Gunicorn                   ✅
+Un solo dominio (/api)     ✅
 ```
 
 ---
@@ -1550,7 +1592,7 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 
 * Kyverno u OPA Gatekeeper para validar manifiestos en admisión.
 * NetworkPolicies entre namespaces.
-* Servir `/metrics` en un puerto independiente no expuesto por el Ingress y restringirlo al namespace de monitorización. Actualmente es accesible a través del Ingress de la API.
+* Restringir `/metrics` al namespace de monitorización con una NetworkPolicy. Ya no se publica por el Ingress.
 
 **Infraestructura como código**
 
