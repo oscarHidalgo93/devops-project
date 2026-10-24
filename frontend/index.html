@@ -95,7 +95,7 @@
 
     <p>
       Esta web está servida desde un contenedor Nginx y desplegada en Kubernetes mediante Helm.
-      El botón llama al backend publicado por Ingress en <strong>api.local</strong>.
+      El botón llama al backend publicado por Ingress en <strong>/api</strong>.
     </p>
 
     <button onclick="loadApi()">Llamar a la API</button>
@@ -118,7 +118,7 @@
       result.innerText = "Consultando backend...";
 
       try {
-        const response = await fetch("http://api.local");
+        const response = await fetch("/api/");
         const data = await response.json();
 
         result.innerText = JSON.stringify(data, null, 2);
