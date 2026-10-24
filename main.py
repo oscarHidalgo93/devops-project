@@ -1,15 +1,15 @@
 import os
 
 from flask import Blueprint, Flask
-from flask_cors import CORS
 from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
-CORS(app)
 metrics = PrometheusMetrics(app, path="/metrics")
 
-
+# Rutas de negocio, publicadas bajo /api. El frontend las llama desde su
+# mismo dominio, así que el navegador no necesita CORS.
 api = Blueprint("api", __name__)
+
 
 def get_counter_file():
     return os.getenv("COUNTER_FILE", "/data/counter.txt")
@@ -77,8 +77,9 @@ def readyz():
 
     return {"status": "ready"}
 
-app.register_blueprint(api) # Monta en '/'
-app.register_blueprint(api, url_prefix="/api", name="api_prefixed") # Monta en '/api'
+
+app.register_blueprint(api, url_prefix="/api")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)

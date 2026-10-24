@@ -28,9 +28,6 @@ resources:
 ingress:
   enabled: true
   hosts:
-    - host: api.local
-      paths:
-        - /
     - host: web.local
       paths:
         - /api
