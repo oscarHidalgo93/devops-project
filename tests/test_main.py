@@ -64,3 +64,24 @@ def test_readyz_not_ready_when_data_dir_is_missing(monkeypatch, tmp_path):
 
     assert response.status_code == 503
     assert response.get_json()["status"] == "not ready"
+
+
+def test_api_prefix_home_returns_200():
+    client = app.test_client()
+
+    response = client.get("/api/")
+
+    assert response.status_code == 200
+    assert "message" in response.get_json()
+
+def test_both_paths_share_the_same_counter(monkeypatch, tmp_path):    
+    counter_file = tmp_path / "counter.txt"
+    monkeypatch.setenv("COUNTER_FILE", str(counter_file))
+
+    client = app.test_client()
+
+    assert client.get("/api/counter").get_json()["counter"] == 1
+    assert client.get("/counter").get_json()["counter"] == 2
+    
+
+   

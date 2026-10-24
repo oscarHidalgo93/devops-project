@@ -13,7 +13,10 @@ containerPort: 8080
 
 ingress:
   enabled: true
-  host: web.local
+  hosts:
+    - host: web.local
+      paths:
+        - /
 
 resources:
   limits:

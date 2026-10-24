@@ -34,8 +34,9 @@ containerPort: 8080
 
 ingress:
   enabled: false
-  host: "" 
-   
+  className: traefik
+  hosts: []
+
 config:
   appName: ""
   environment: ""
