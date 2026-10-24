@@ -1,0 +1,12 @@
+# Valores del chart app-of-apps. El script de arranque (scripts/demo.sh) los
+# sobrescribe al crear la Application raíz, de modo que un mismo chart sirve
+# para cualquier entorno.
+
+# Repositorio del que ArgoCD lee los manifiestos.
+repoURL: https://github.com/oscarHidalgo93/devops-project.git
+
+# Rama que despliegan todas las Applications generadas.
+revision: main
+
+# Dominio base: el frontend y la API se publican en web.<domain>.
+domain: localtest.me

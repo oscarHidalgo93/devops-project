@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: python-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: {{ .Values.repoURL }}
+    targetRevision: {{ .Values.revision }}
+    path: python-app
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-api.yaml
+      # El host depende del entorno, por eso se fija aquí y no en values-api.yaml.
+      valuesObject:
+        ingress:
+          hosts:
+            - host: web.{{ .Values.domain }}
+              paths:
+                - /api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
