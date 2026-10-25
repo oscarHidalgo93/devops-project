@@ -10,6 +10,8 @@ El proyecto simula una cadena de entrega de software moderna a pequeña escala:
 Código → Tests → CI → Docker → Helm → Kubernetes → Ingress → Configuración → Escalado → Persistencia
 ```
 
+> Para levantar el laboratorio completo en local con un solo comando, véase la sección 25.
+
 > Nota de seguridad: este README utiliza placeholders como `<TAILSCALE_VM_IP>`, `<CLUSTER_API_IP>`, `<example-token>` o `<your-path>` para evitar publicar IPs reales, tokens, certificados, kubeconfigs completos, rutas personales o detalles internos del entorno local.
 
 ---
@@ -190,6 +192,12 @@ devops-project/
 │
 ├── infra/
 │   ├── argocd/
+│   │   ├── apps/
+│   │   │   ├── templates/
+│   │   │   │   ├── app-api.yaml
+│   │   │   │   └── app-web.yaml
+│   │   │   ├── Chart.yaml
+│   │   │   └── values.yaml
 │   │   ├── clusters/
 │   │   │   ├── k3s-lab-wsl/
 │   │   │   │   ├── app-api.yaml
@@ -230,6 +238,9 @@ devops-project/
 │   ├── values.yaml
 │   ├── values-api.yaml
 │   └── values-web.yaml
+│
+├── scripts/
+│   └── demo.sh
 │
 ├── tests/
 │   └── test_main.py
@@ -970,6 +981,8 @@ Cada cluster ejecuta su propio ArgoCD, con Applications que apuntan a su rama me
 
 Las imágenes no se reconstruyen al promocionar. La CI las publica en GHCR y fija su tag en los values al integrar en `develop`; el merge lleva ese tag a `main`, y la VM despliega una imagen que ya existe y ya fue escaneada.
 
+`main` es también la rama que despliega por defecto el entorno de demostración (sección 25).
+
 ---
 
 ## 20. Acceso remoto con Tailscale
@@ -1314,7 +1327,7 @@ El orden al aplicarlas en un cluster que ya tenía la Application del backend no
 
 ### Limitaciones actuales
 
-* Las Applications se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El patrón *app-of-apps* (una Application raíz que gestione `infra/argocd/`) resolvería esto.
+* Las Applications de los clusters de la VM y de desarrollo se aplican con `kubectl apply`, por lo que un cambio en sus manifiestos no se propaga automáticamente. El entorno de demostración ya usa el patrón *app-of-apps* (sección 25); llevar a él el cluster de desarrollo está pendiente.
 
 ---
 
@@ -1411,7 +1424,83 @@ La alternativa sería compartir la clave privada entre ambos entornos para reuti
 
 ---
 
-## 25. Troubleshooting trabajado
+## 25. Entorno de demostración con k3d
+
+El laboratorio puede levantarse completo en cualquier máquina con Docker mediante un único comando. El script `scripts/demo.sh` crea un cluster k3d —K3s dentro de contenedores de Docker—, instala ArgoCD y deja que este despliegue la aplicación desde Git.
+
+### Requisitos
+
+* Docker, k3d, kubectl y helm.
+* Unos 3 GB de memoria libres.
+* Conexión a internet: las imágenes se descargan de sus registros, y los nombres `*.localtest.me` se resuelven a `127.0.0.1` mediante DNS público.
+* Arquitectura `linux/amd64`. Las imágenes de la aplicación solo se publican para esa plataforma.
+
+### Uso
+
+```bash
+git clone https://github.com/oscarHidalgo93/devops-project.git
+cd devops-project
+./scripts/demo.sh up
+```
+
+El script no termina hasta que todas las Applications están sincronizadas y sanas, y después muestra las URLs:
+
+```text
+Aplicación  http://web.localtest.me:8080
+API         http://web.localtest.me:8080/api/
+ArgoCD      http://argocd.localtest.me:8080
+```
+
+Otros subcomandos:
+
+```bash
+./scripts/demo.sh status                 # estado de las Applications y URLs
+./scripts/demo.sh kubeconfig [RUTA]      # exporta el kubeconfig, por ejemplo para Lens
+./scripts/demo.sh down                   # borra el cluster
+```
+
+Cada ejecución tarda unos minutos, sobre todo en descargar imágenes: viven dentro del cluster y desaparecen con él.
+
+### Variables
+
+```text
+DEMO_REVISION      rama que despliega ArgoCD                 (main)
+DEMO_DOMAIN        dominio base de las URLs                  (localtest.me)
+DEMO_PORT          puerto local de la aplicación             (8080)
+DEMO_API_PORT      puerto local del API server               (6550)
+DEMO_WAIT_TIMEOUT  segundos de espera al despliegue          (600)
+API_TOKEN          token de la API; si falta, se genera uno aleatorio
+```
+
+### Cómo funciona
+
+```text
+./scripts/demo.sh up
+  ├─ k3d crea el cluster, con K3s fijado a la versión del entorno de desarrollo
+  ├─ Helm instala ArgoCD con su versión fijada
+  ├─ se genera el Secret de la API con un token aleatorio
+  └─ se aplica una Application raíz ──► chart infra/argocd/apps
+                                          ├─ Application python-api
+                                          └─ Application python-web
+```
+
+La Application raíz sigue el patrón *app-of-apps*: no despliega la aplicación, sino un chart de Helm que genera las Applications hijas. El chart recibe la rama y el dominio como parámetros, de modo que el mismo código sirve para cualquier entorno. La única pieza que no vive en Git es la propia raíz, porque sus parámetros dependen de dónde se ejecute.
+
+Decisiones de diseño:
+
+* **El Secret se genera en cada cluster y nunca se escribe en Git.** Un cluster efímero no necesita un secreto persistente. El Deployment lo sigue exigiendo: si faltara, el pod no arrancaría, que es el comportamiento correcto para un secreto obligatorio. Generarlo con `randAlphaNum` en el chart no es una alternativa con ArgoCD, que renderiza sin acceso al cluster y produciría un valor distinto en cada sincronización.
+* **Los puertos se publican solo en `127.0.0.1`.** Ni la aplicación ni el API server de Kubernetes quedan accesibles desde otras máquinas de la red.
+* **Cada llamada a `kubectl` y `helm` usa un contexto explícito.** El script no puede actuar sobre otro cluster aunque el contexto activo sea distinto.
+* **`localtest.me` evita editar el fichero `hosts`.** Si el DNS público no está disponible, `DEMO_DOMAIN=localhost` funciona en los navegadores, que resuelven `*.localhost` por su cuenta.
+
+### Limitaciones
+
+* Las imágenes solo existen para `linux/amd64`: en un Mac con Apple Silicon o en un servidor ARM los pods no arrancarían.
+* El entorno no incluye todavía la monitorización.
+
+---
+
+## 26. Troubleshooting trabajado
 
 Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 
@@ -1462,10 +1551,15 @@ Durante el desarrollo se resolvieron incidencias reales relacionadas con:
 * Al combinar ficheros de values, Helm fusiona los mapas pero sustituye las listas enteras: una lista de hosts en el fichero de un release reemplaza a la del fichero común, no se suma a ella.
 * Dentro de un `range` de Helm, `.` pasa a ser el elemento recorrido; para acceder al contexto del chart hay que usar `$`.
 * La mejor configuración de CORS es no necesitarla: si el frontend y la API comparten origen, el navegador no aplica la política y la API no tiene que admitir orígenes ajenos.
+* Crear una rama a partir de una rama remota (`git switch -c nueva origin/develop`) la deja siguiendo a esa rama remota. Una sincronización desde el editor empuja entonces a su *upstream*, que es `develop`, sin pasar por Pull Request. Las ramas de trabajo se crean desde la rama local o con `--no-track`, y su *upstream* se fija al publicarlas.
+* El git de Windows no ve los permisos de los ficheros de un repositorio en WSL: interpreta que un script ha perdido el bit de ejecución y lo incluye en el siguiente commit. Escribir el fichero desde una herramienta de Windows lo retira también en disco. Trabajar con el editor conectado a WSL evita las dos cosas.
+* Un volumen con `WaitForFirstConsumer` no se crea hasta que existe un pod que lo pide, por lo que ese pod aparece un momento en `Pending` sin que haya ningún fallo.
+* Publicar un puerto de Docker sin indicar la dirección lo expone en todas las interfaces, también hacia la red local. En un entorno de demostración conviene limitarlo a `127.0.0.1`.
+* Con `set -o pipefail`, un `head` que cierra la tubería antes de que termine el comando anterior provoca un `SIGPIPE` que aborta el script. Para generar datos aleatorios conviene un comando que lea una cantidad fija y termine solo, como `od -N16`.
 
 ---
 
-## 26. Buenas prácticas de seguridad aplicadas
+## 27. Buenas prácticas de seguridad aplicadas
 
 El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 
@@ -1486,10 +1580,11 @@ El proyecto aplica varias prácticas básicas de seguridad y limpieza:
 * Desactivación de la interfaz de control de Gunicorn, que no se utiliza: no se mantienen vías de gestión innecesarias.
 * API publicada en el mismo origen que el frontend, sin CORS habilitado.
 * Métricas y endpoints de salud accesibles solo desde dentro del cluster.
+* Entorno de demostración con los puertos publicados solo en `127.0.0.1` y un secreto generado en cada cluster que nunca se escribe en Git.
 
 ---
 
-## 27. Alcance técnico actual
+## 28. Alcance técnico actual
 
 El laboratorio incluye actualmente:
 
@@ -1518,11 +1613,12 @@ Probes de salud            ✅
 Rollouts sin cortes        ✅
 Gunicorn                   ✅
 Un solo dominio (/api)     ✅
+Demo reproducible (k3d)    ✅
 ```
 
 ---
 
-## 28. Roadmap
+## 29. Roadmap
 
 Próximas mejoras previstas:
 
@@ -1585,7 +1681,7 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 
 **Cerrar el modelo GitOps**
 
-* Patrón *app-of-apps*: una Application raíz que gestione `infra/`, de forma que los manifiestos de ArgoCD, Prometheus y Sealed Secrets dejen de aplicarse con `kubectl apply` manual.
+* Extender el patrón *app-of-apps*, ya usado por el entorno de demostración, al cluster de desarrollo y a la infraestructura (Prometheus y Sealed Secrets), de forma que sus manifiestos dejen de aplicarse con `kubectl apply` manual.
 * Evaluar `ServerSideApply` para que `selfHeal` detecte campos añadidos fuera de Git, que actualmente pasan desapercibidos.
 
 **Policy as code**
@@ -1609,6 +1705,10 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 * Comprobar en la CI que las Pull Requests hacia `main` proceden de `develop`, y exigirlo en las reglas de la rama.
 * PodDisruptionBudget para limitar las interrupciones voluntarias simultáneas.
 * Fijar las imágenes base por digest, requisito previo para SBOM y firma.
+* Publicar imágenes multiarquitectura (`linux/amd64` y `linux/arm64`), para ejecutar la demo en un Mac con Apple Silicon y en servidores ARM.
+* No publicar ninguna imagen hasta que ambas superen el escaneo de seguridad.
+* Incluir la monitorización en el entorno de demostración.
+* Conservar las imágenes entre ejecuciones de la demo con un registro espejo local, para no descargarlas de nuevo cada vez.
 
 **Evolución de la gestión de secretos**
 
@@ -1616,7 +1716,7 @@ Decisiones tomadas conscientemente durante el desarrollo, agrupadas aquí para c
 
 ---
 
-## 29. Conclusión
+## 30. Conclusión
 
 Este proyecto representa una base práctica y progresiva para trabajar conceptos de Platform Engineering y DevSecOps mediante construcción real.
 
