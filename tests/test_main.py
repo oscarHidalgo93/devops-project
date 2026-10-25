@@ -4,7 +4,7 @@ from main import app
 def test_home_endpoint_returns_200():
     client = app.test_client()
 
-    response = client.get("/")
+    response = client.get("/api/")
 
     assert response.status_code == 200
     data = response.get_json()
@@ -18,8 +18,8 @@ def test_counter_endpoint_increments(monkeypatch, tmp_path):
 
     client = app.test_client()
 
-    first_response = client.get("/counter")
-    second_response = client.get("/counter")
+    first_response = client.get("/api/counter")
+    second_response = client.get("/api/counter")
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
@@ -64,3 +64,12 @@ def test_readyz_not_ready_when_data_dir_is_missing(monkeypatch, tmp_path):
 
     assert response.status_code == 503
     assert response.get_json()["status"] == "not ready"
+
+
+def test_root_paths_are_no_longer_served():
+    # Contrato: la API solo se publica bajo /api. Si alguien volviera a montar
+    # las rutas en la raíz, quedarían expuestas fuera del prefijo esperado.
+    client = app.test_client()
+
+    assert client.get("/").status_code == 404
+    assert client.get("/counter").status_code == 404

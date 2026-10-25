@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/oscarhidalgo93/frontend-app
-  tag: "43c93cf"
+  tag: "d6cd101"
   pullPolicy: IfNotPresent
 
 service:
@@ -13,7 +13,10 @@ containerPort: 8080
 
 ingress:
   enabled: true
-  host: web.local
+  hosts:
+    - host: web.local
+      paths:
+        - /
 
 resources:
   limits:

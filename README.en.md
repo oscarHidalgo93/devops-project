@@ -10,6 +10,8 @@ The project simulates a modern software delivery chain at small scale:
 Code → Tests → CI → Docker → Helm → Kubernetes → Ingress → Configuration → Scaling → Persistence
 ```
 
+> To bring up the whole lab locally with a single command, see section 25.
+
 > Security note: this README uses placeholders such as `<TAILSCALE_VM_IP>`, `<CLUSTER_API_IP>`, `<example-token>` or `<your-path>` to avoid publishing real IPs, tokens, certificates, full kubeconfigs, personal paths or internal details of the local environment.
 
 ---
@@ -57,12 +59,12 @@ Backend scaling is driven by an HPA with CPU and memory targets, shown in the di
 
 ```mermaid
 flowchart TD
-    User[User / Browser] --> Hosts[Local resolution: api.local / web.local]
+    User[User / Browser] --> Hosts[Local resolution: web.local]
     Hosts --> Tailscale[Tailscale]
     Tailscale --> Traefik[Traefik Ingress Controller]
 
-    Traefik --> WebIngress[Ingress web.local]
-    Traefik --> ApiIngress[Ingress api.local]
+    Traefik --> WebIngress["Ingress web.local/"]
+    Traefik --> ApiIngress["Ingress web.local/api"]
 
     WebIngress --> WebService[Frontend Service]
     ApiIngress --> ApiService[Backend API Service]
@@ -94,7 +96,7 @@ flowchart TD
 flowchart LR
     Browser[Browser] --> Web["Frontend web.local"]
     Web --> Nginx["Nginx"]
-    Nginx --> ApiCall["fetch http://api.local"]
+    Nginx --> ApiCall["fetch /api/ (same origin)"]
     ApiCall --> Flask["Flask Backend API"]
     Flask --> Env["Environment variables"]
     Env --> CM["ConfigMap"]
@@ -111,7 +113,6 @@ flowchart LR
 
 * Python
 * Flask
-* Flask-CORS
 * prometheus-flask-exporter
 * HTML
 * JavaScript
@@ -191,6 +192,12 @@ devops-project/
 │
 ├── infra/
 │   ├── argocd/
+│   │   ├── apps/
+│   │   │   ├── templates/
+│   │   │   │   ├── app-api.yaml
+│   │   │   │   └── app-web.yaml
+│   │   │   ├── Chart.yaml
+│   │   │   └── values.yaml
 │   │   ├── clusters/
 │   │   │   ├── k3s-lab-wsl/
 │   │   │   │   ├── app-api.yaml
@@ -232,6 +239,9 @@ devops-project/
 │   ├── values-api.yaml
 │   └── values-web.yaml
 │
+├── scripts/
+│   └── demo.sh
+│
 ├── tests/
 │   └── test_main.py
 │
@@ -254,16 +264,22 @@ devops-project/
 
 The API is built with Flask.
 
-Main endpoints:
+Public endpoints, under the `/api` prefix:
 
 ```text
-GET /
-GET /counter
-GET /healthz
-GET /readyz
+GET /api/
+GET /api/counter
 ```
 
-The `/` endpoint returns basic information about the application:
+Internal endpoints, at the root and not reachable through the Ingress:
+
+```text
+GET /healthz
+GET /readyz
+GET /metrics
+```
+
+The `/api/` endpoint returns basic information about the application:
 
 ```json
 {
@@ -274,7 +290,7 @@ The `/` endpoint returns basic information about the application:
 }
 ```
 
-The `/counter` endpoint increments a persistent counter stored in:
+The `/api/counter` endpoint increments a persistent counter stored in:
 
 ```text
 /data/counter.txt
@@ -297,7 +313,7 @@ This endpoint is used to validate the behaviour of the persistent volume when po
 `/healthz` and `/readyz` exist for the Kubernetes probes and answer different questions:
 
 * `/healthz` (liveness) only confirms that the process responds. If it fails, Kubernetes restarts the container.
-* `/readyz` (readiness) checks that the data directory exists and is writable, which is what `/counter` needs. If it fails, it returns `503` and Kubernetes stops sending traffic to the pod without restarting it.
+* `/readyz` (readiness) checks that the data directory exists and is writable, which is what `/api/counter` needs. If it fails, it returns `503` and Kubernetes stops sending traffic to the pod without restarting it.
 
 The liveness probe deliberately does not check external dependencies. If it did, a dependency outage would restart every replica at once without fixing anything; those checks belong in the readiness probe, which takes the pod out of rotation and brings it back once the dependency recovers.
 
@@ -316,7 +332,7 @@ It runs with one worker and four threads. On Kubernetes, capacity grows through 
 
 ### Frontend
 
-The frontend is served by Nginx and consumes the API through JavaScript.
+The frontend is served by Nginx and consumes the API through JavaScript, with relative requests to `/api/` on its own domain.
 
 Responsibilities:
 
@@ -507,19 +523,36 @@ helm template python-api . -f values.yaml -f values-api.yaml | kubectl apply --d
 
 ## 11. Ingress
 
-K3s ships Traefik as its default Ingress Controller.
+K3s ships Traefik as its default Ingress Controller. The class is declared in `ingress.className`, so the chart can be used with another controller without changing the templates.
 
-Hosts used:
+The application is published on a single domain, and traffic is split by path:
 
 ```text
-api.local
-web.local
+web.local/      → frontend (Nginx)
+web.local/api/  → API (Flask)
 ```
+
+Each release declares its hosts and paths in its values file. They are two Ingress objects on the same host, and the controller routes each request to the most specific path:
+
+```yaml
+# values-api.yaml
+ingress:
+  enabled: true
+  hosts:
+    - host: web.local
+      paths:
+        - /api
+```
+
+Publishing the API on the same domain as the frontend has three consequences:
+
+* The browser makes requests from the same origin as the page, so CORS does not come into play and the API does not need to enable it.
+* The client only needs to resolve one name.
+* The Ingress only routes `/api` to the API: `/metrics`, `/healthz` and `/readyz` are reachable only from inside the cluster, for Prometheus and the kubelet.
 
 Example of local resolution on the client machine:
 
 ```text
-<TAILSCALE_VM_IP> api.local
 <TAILSCALE_VM_IP> web.local
 ```
 
@@ -530,6 +563,18 @@ C:\Windows\System32\drivers\etc\hosts
 ```
 
 > `<TAILSCALE_VM_IP>` is used as a placeholder to avoid publishing the environment's real IP addresses.
+
+### Migrating to a single domain
+
+The API used to be published on its own domain, `api.local`. The change was made in three steps so that its consumers were never cut off, following the *expand/contract* pattern:
+
+```text
+1. Expand    the API answers on api.local/ and on web.local/api/ at the same time
+2. Migrate   the frontend switches to calling /api/
+3. Contract  api.local, the root routes and CORS are removed
+```
+
+At every step the old and the new coexist, so the order in which ArgoCD applies the chart and CI publishes the image no longer matters. In Flask, the business routes are grouped in a Blueprint, which during the transition was mounted both at the root and under `/api`. A contract test checks that the root no longer serves them.
 
 ---
 
@@ -741,10 +786,10 @@ python-api-python-app-pvc   Bound    1Gi        RWO            local-path
 Persistence test:
 
 ```bash
-curl http://api.local/counter
-curl http://api.local/counter
+curl http://web.local/api/counter
+curl http://web.local/api/counter
 kubectl delete pod -n dev -l app.kubernetes.io/instance=python-api
-curl http://api.local/counter
+curl http://web.local/api/counter
 ```
 
 The counter keeps going after the pods are recreated, proving real persistence.
@@ -767,9 +812,10 @@ tests/test_main.py
 
 The tests validate:
 
-* The `/` endpoint.
-* The `/counter` endpoint.
-* The counter increment logic.
+* The `/api/` endpoint.
+* The `/api/counter` endpoint and the counter increment logic.
+* The health endpoints, including the case where readiness returns `503`.
+* The route contract: the root no longer serves the business routes.
 * The use of a temporary path so tests do not depend on the real PVC.
 
 Running locally:
@@ -934,6 +980,8 @@ main     →  VM                     demo: stable, only changes on promotion
 Each cluster runs its own ArgoCD, with Applications pointing at their branch through `targetRevision`. Promoting a version to the demo means merging `develop` into `main`: the merge that already closed the flow gains an operational effect, and working on `develop` can no longer break the demo.
 
 Images are not rebuilt on promotion. CI publishes them to GHCR and pins their tag in the values when integrating into `develop`; the merge carries that tag to `main`, and the VM deploys an image that already exists and has already been scanned.
+
+`main` is also the branch the demo environment deploys by default (section 25).
 
 ---
 
@@ -1104,7 +1152,6 @@ Initialization in `main.py`:
 from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
-CORS(app)
 metrics = PrometheusMetrics(app, path="/metrics")
 ```
 
@@ -1146,7 +1193,7 @@ Example query in Grafana or Prometheus:
 rate(flask_http_request_total[5m])
 ```
 
-> Note: the `/metrics` endpoint is reachable through the API's Ingress. In a production environment it should be served on a separate port that is not publicly exposed, or access should be restricted with a NetworkPolicy so that only Prometheus can query it, since it exposes information about the application's routes, traffic and errors.
+> Note: `/metrics` is not published through the Ingress, which only routes `/api` to the API (section 11). Prometheus scrapes it directly on the Service. Further restricting that access inside the cluster, so that only the monitoring namespace can reach it, is a job for a NetworkPolicy.
 
 ---
 
@@ -1280,7 +1327,7 @@ The order in which they are applied on a cluster that already had the backend Ap
 
 ### Current limitations
 
-* Applications are applied with `kubectl apply`, so a change to their manifests does not propagate automatically. The *app-of-apps* pattern (a root Application that manages `infra/argocd/`) would solve this.
+* The Applications of the VM and development clusters are applied with `kubectl apply`, so a change to their manifests does not propagate automatically. The demo environment already uses the *app-of-apps* pattern (section 25); moving the development cluster to it is pending.
 
 ---
 
@@ -1377,7 +1424,83 @@ The alternative would be sharing the private key between both environments to re
 
 ---
 
-## 25. Troubleshooting log
+## 25. Demo environment with k3d
+
+The whole lab can be brought up on any machine with Docker using a single command. The `scripts/demo.sh` script creates a k3d cluster — K3s running inside Docker containers —, installs ArgoCD and lets it deploy the application from Git.
+
+### Requirements
+
+* Docker, k3d, kubectl and helm.
+* About 3 GB of free memory.
+* An internet connection: images are pulled from their registries, and `*.localtest.me` names resolve to `127.0.0.1` through public DNS.
+* `linux/amd64` architecture. The application images are only published for that platform.
+
+### Usage
+
+```bash
+git clone https://github.com/oscarHidalgo93/devops-project.git
+cd devops-project
+./scripts/demo.sh up
+```
+
+The script does not finish until every Application is synced and healthy, and then prints the URLs:
+
+```text
+Application http://web.localtest.me:8080
+API         http://web.localtest.me:8080/api/
+ArgoCD      http://argocd.localtest.me:8080
+```
+
+Other subcommands:
+
+```bash
+./scripts/demo.sh status                 # Applications status and URLs
+./scripts/demo.sh kubeconfig [PATH]      # exports the kubeconfig, for Lens for example
+./scripts/demo.sh down                   # deletes the cluster
+```
+
+Each run takes a few minutes, mostly pulling images: they live inside the cluster and disappear with it.
+
+### Variables
+
+```text
+DEMO_REVISION      branch deployed by ArgoCD                 (main)
+DEMO_DOMAIN        base domain of the URLs                   (localtest.me)
+DEMO_PORT          local port of the application             (8080)
+DEMO_API_PORT      local port of the API server              (6550)
+DEMO_WAIT_TIMEOUT  seconds to wait for the deployment        (600)
+API_TOKEN          API token; if missing, a random one is generated
+```
+
+### How it works
+
+```text
+./scripts/demo.sh up
+  ├─ k3d creates the cluster, with K3s pinned to the development environment's version
+  ├─ Helm installs ArgoCD at its pinned version
+  ├─ the API Secret is generated with a random token
+  └─ a root Application is applied ──► chart infra/argocd/apps
+                                         ├─ Application python-api
+                                         └─ Application python-web
+```
+
+The root Application follows the *app-of-apps* pattern: it does not deploy the application but a Helm chart that generates the child Applications. The chart takes the branch and the domain as parameters, so the same code works for any environment. The only piece that does not live in Git is the root itself, because its parameters depend on where it runs.
+
+Design decisions:
+
+* **The Secret is generated in each cluster and never written to Git.** An ephemeral cluster does not need a persistent secret. The Deployment still requires it: if it were missing, the pod would not start, which is the right behaviour for a mandatory secret. Generating it with `randAlphaNum` in the chart is not an option with ArgoCD, which renders without cluster access and would produce a different value on every sync.
+* **Ports are published only on `127.0.0.1`.** Neither the application nor the Kubernetes API server is reachable from other machines on the network.
+* **Every `kubectl` and `helm` call uses an explicit context.** The script cannot act on another cluster even if the active context is different.
+* **`localtest.me` avoids editing the `hosts` file.** If public DNS is unavailable, `DEMO_DOMAIN=localhost` works in browsers, which resolve `*.localhost` on their own.
+
+### Limitations
+
+* The images only exist for `linux/amd64`: on an Apple Silicon Mac or an ARM server the pods would not start.
+* The environment does not include monitoring yet.
+
+---
+
+## 26. Troubleshooting log
 
 During development, real issues were solved related to:
 
@@ -1423,10 +1546,20 @@ During development, real issues were solved related to:
 * CI produces images and a new tag on every integration into `develop`, even when the change only touches documentation or the chart. The result is a deployment with no code change behind it.
 * A dependency without a pinned version can introduce behaviour nobody decided on. Gunicorn 26 tried to create its control socket in `$HOME`, which is not writable in a container with no home directory and a read-only filesystem.
 * A Pull Request from a branch based on `develop` into `main` brings in all of `develop`, not just its own commits. GitHub suggests the repository's default branch as the base, and that slip amounts to an unplanned promotion.
+* Changing the address a service is consumed through without downtime requires the old and the new to coexist during the transition (*expand/contract*). Doing it in a single change leaves a window, between the chart sync and the arrival of the image, in which old clients call a path that no longer exists.
+* A Flask Blueprint's routes are copied into the application when it is registered: routes defined after `register_blueprint` are not included, and Flask refuses to start.
+* When combining values files, Helm merges maps but replaces whole lists: a list of hosts in a release's file replaces the one in the shared file instead of adding to it.
+* Inside a Helm `range`, `.` becomes the element being iterated; to reach the chart context you have to use `$`.
+* The best CORS configuration is not needing one: if the frontend and the API share an origin, the browser does not apply the policy and the API does not have to allow foreign origins.
+* Creating a branch from a remote branch (`git switch -c new origin/develop`) leaves it tracking that remote branch. A sync from the editor then pushes to its *upstream*, which is `develop`, bypassing any Pull Request. Working branches are created from the local branch or with `--no-track`, and their *upstream* is set when they are published.
+* Windows git does not see the file permissions of a repository living in WSL: it reads a script as having lost its executable bit and includes that in the next commit. Writing the file from a Windows tool removes the bit on disk too. Working with the editor connected to WSL avoids both.
+* A volume with `WaitForFirstConsumer` is not created until a pod requests it, so that pod shows up as `Pending` for a moment without anything being wrong.
+* Publishing a Docker port without an address exposes it on every interface, including the local network. In a demo environment it should be limited to `127.0.0.1`.
+* With `set -o pipefail`, a `head` that closes the pipe before the previous command finishes causes a `SIGPIPE` that aborts the script. To generate random data it is better to use a command that reads a fixed amount and exits on its own, such as `od -N16`.
 
 ---
 
-## 26. Security practices applied
+## 27. Security practices applied
 
 The project applies several basic security and hygiene practices:
 
@@ -1445,10 +1578,13 @@ The project applies several basic security and hygiene practices:
 * Removal of build tools (`pip`, `setuptools`, `wheel`) from the runtime image.
 * Upgrading the frontend base image's packages during the build, then returning the container to an unprivileged user.
 * Disabling Gunicorn's control interface, which is not used: no unnecessary management paths are kept.
+* API published on the same origin as the frontend, with no CORS enabled.
+* Metrics and health endpoints reachable only from inside the cluster.
+* Demo environment with ports published only on `127.0.0.1` and a secret generated in each cluster that is never written to Git.
 
 ---
 
-## 27. Current technical scope
+## 28. Current technical scope
 
 The lab currently includes:
 
@@ -1476,11 +1612,13 @@ Local K3s on WSL2          ✅
 Health probes              ✅
 Zero-downtime rollouts     ✅
 Gunicorn                   ✅
+Single domain (/api)       ✅
+Reproducible demo (k3d)    ✅
 ```
 
 ---
 
-## 28. Roadmap
+## 29. Roadmap
 
 Planned improvements:
 
@@ -1543,14 +1681,14 @@ Decisions made consciously during development, grouped here to be closed at the 
 
 **Closing the GitOps model**
 
-* *App-of-apps* pattern: a root Application that manages `infra/`, so that the ArgoCD, Prometheus and Sealed Secrets manifests are no longer applied with a manual `kubectl apply`.
+* Extend the *app-of-apps* pattern, already used by the demo environment, to the development cluster and the infrastructure (Prometheus and Sealed Secrets), so that their manifests are no longer applied with a manual `kubectl apply`.
 * Evaluate `ServerSideApply` so that `selfHeal` detects fields added outside Git, which currently go unnoticed.
 
 **Policy as code**
 
 * Kyverno or OPA Gatekeeper to validate manifests at admission.
 * NetworkPolicies between namespaces.
-* Serve `/metrics` on a separate port not exposed by the Ingress and restrict it to the monitoring namespace. It is currently reachable through the API's Ingress.
+* Restrict `/metrics` to the monitoring namespace with a NetworkPolicy. It is no longer published through the Ingress.
 
 **Infrastructure as code**
 
@@ -1567,6 +1705,10 @@ Decisions made consciously during development, grouped here to be closed at the 
 * Check in CI that Pull Requests into `main` come from `develop`, and enforce it in the branch rules.
 * PodDisruptionBudget to limit simultaneous voluntary disruptions.
 * Pin base images by digest, a prerequisite for SBOM and signing.
+* Publish multi-architecture images (`linux/amd64` and `linux/arm64`), to run the demo on an Apple Silicon Mac and on ARM servers.
+* Publish no image until both pass the security scan.
+* Include monitoring in the demo environment.
+* Keep images between demo runs with a local mirror registry, so they are not pulled again every time.
 
 **Evolving secret management**
 
@@ -1574,7 +1716,7 @@ Decisions made consciously during development, grouped here to be closed at the 
 
 ---
 
-## 29. Conclusion
+## 30. Conclusion
 
 This project is a practical, progressive foundation for working through Platform Engineering and DevSecOps concepts by actually building things.
 

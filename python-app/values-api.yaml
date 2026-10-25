@@ -2,7 +2,7 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/oscarhidalgo93/python-k8s-app
-  tag: "43c93cf"
+  tag: "d6cd101"
   pullPolicy: IfNotPresent
 
 service:
@@ -27,7 +27,10 @@ resources:
 
 ingress:
   enabled: true
-  host: api.local  
+  hosts:
+    - host: web.local
+      paths:
+        - /api
 
 config:
   appName: python-api
