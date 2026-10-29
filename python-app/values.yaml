@@ -72,3 +72,9 @@ strategy:
 
 livenessProbe: {}
 readinessProbe: {}
+
+# Sleep antes de matar el pod para evitar errores/cortes en Traefik con rolling update.
+lifecycle:
+  preStop:
+    sleep:
+      seconds: 5
